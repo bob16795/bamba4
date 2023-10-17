@@ -1,0 +1,93 @@
+def FileRange: import "position.bam".FileRange;
+def printf: extern fn[] -> Void;
+
+def Error: class {
+    def Id: class {
+        def Todo: u8(0);
+        def Parse: u8(1);
+        def Unreachable: u8(2);
+        def NoLocal: u8(3);
+        def NoType: u8(4);
+    };
+
+    def id: prop u8;
+    def pos: prop FileRange;
+    def data: prop (*u8[])[3];
+
+    def TodoError: fn[name: *u8[]] -> Self {
+        def result: new Self;
+
+        comptime {
+            @PRINT("Theres a todo, problaby should remove that");
+        };
+
+        result.id = Id.Todo;
+        result.data[usize(0)] = name;
+
+        return *result;
+    };
+    
+    def ParseError: fn[name: *u8[], pos: FileRange] -> Self {
+        def result: new Self;
+
+        result.id = Id.Parse;
+        result.data[usize(0)] = name;
+        result.pos = pos;
+
+        return *result;
+    };
+    
+    def NoLocalError: fn[name: *std.Types.Slice(u8), pos: FileRange] -> Self {
+        def result: new Self;
+
+        result.id = Id.NoLocal;
+        result.data[usize(0)] = *name.ptr;
+        result.data[usize(1)] = *name.len;
+        result.pos = pos;
+
+        return *result;
+    };
+    
+    def NoTypeError: fn[name: *u8[], pos: FileRange] -> Self {
+        def result: new Self;
+
+        result.id = Id.NoType;
+        result.data[usize(0)] = name;
+        result.pos = pos;
+
+        return *result;
+    };
+
+    def Unreachable: fn[name: *u8[]] -> Self {
+        def result: new Self;
+
+        result.id = Id.Unreachable;
+        result.data[usize(0)] = name;
+
+        return *result;
+    };
+    
+    def print: fn[self: *Self] -> Void {
+        if (*self.id == Id.Todo) {
+            printf("Todo error %s\n", *self.data[usize(0)]);
+        } else if (*self.id == Id.Parse) {
+            printf("Parsing error %s\n", *self.data[usize(0)]);
+            self.pos.print();
+            printf("\n");
+        } else if (*self.id == Id.Unreachable) {
+            printf("Oops %s\n", *self.data[usize(0)]);
+        } else if (*self.id == Id.NoType) {
+            printf("The value %s has no type\n", *self.data[usize(0)]);
+            self.pos.print();
+            printf("\n");
+        } else if (*self.id == Id.NoLocal) {
+            printf("The Local %.*s is undefined.\n", *self.data[usize(1)], *self.data[usize(0)]);
+            self.pos.print();
+            printf("\n");
+        } else {
+            printf("Invalid Error\n");
+        }
+
+        return;  
+    };
+};

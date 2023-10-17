@@ -1,0 +1,117 @@
+def std: import "std";
+
+def Value: import "values.bam".Value;
+def Context: import "values.bam".Context;
+def LLVM: import "lib/llvm.bam";
+
+def exit: extern fn[] -> Void;
+
+def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lValue {
+    def namePtr: &name;
+
+    if (*self.kind != u8(Value.Kind.Function)) {
+        std.Types.printf("Error: impl non function\n");
+
+        exit(u32(1));
+    }
+
+    def data: (*Value.FunctionData)(*self.data);
+    def impl: data.impls.get(*namePtr.base.items);
+
+    if (impl != (*LLVM.lValue)(null)) {
+        return *impl;
+    }
+
+    if (data.output.is_some()) {
+        def input: new comptime {
+            return std.Types.ArrayList(LLVM.lType);
+        };
+        input.init();
+
+        def funcType: data.output.val.getType(ctx).functionType(
+            *input.items,
+        );
+
+        data.kind = funcType;
+
+        def str: new std.Types.String;
+        str = std.Types.String.fromSlice(*data.name);
+        str.base.push(u8(0));
+
+        def func: (*ctx.module).addFunction(*str.base.items.ptr, funcType);
+
+        data.impls.put(*namePtr.base.items, func);
+
+        if (*data.isExtern) return func;
+
+        def oldret: *ctx.returned;
+        def oldblk: (*ctx.builder).getBlock();
+
+        ctx.returned = Bool(false);
+
+        def blk: (*ctx.context).appendBasicBlock(func, "entry");
+        (*ctx.builder).setBlock(blk);
+
+        def result: &Statements.TopStatement.export(data.body, ctx);
+        if (*result.isErr) {
+            result.errv.print();
+            return func;
+        }
+
+        if (!*ctx.returned) {
+            std.Types.printf("warn: implicit return\n");
+        }
+
+        (*ctx.builder).setBlock(oldblk);
+        ctx.returned = oldret;
+
+        return func;
+    } else {
+        def input: new comptime {
+            return std.Types.ArrayList(LLVM.lType);
+        };
+        input.init();
+
+        def baseKind: (*ctx.context).voidType();
+
+        def funcType: baseKind.functionType(
+            *input.items,
+        );
+
+        data.kind = funcType;
+        
+        def str: new std.Types.String;
+        str = std.Types.String.fromSlice(*data.name);
+        str.base.push(u8(0));
+
+        def func: (*ctx.module).addFunction(*str.base.items.ptr, funcType);
+
+        data.impls.put(*namePtr.base.items, func);
+
+        if (*data.isExtern) return func;
+
+        def oldret: *ctx.returned;
+        def oldblk: (*ctx.builder).getBlock();
+
+        ctx.returned = Bool(false);
+
+        def blk: (*ctx.context).appendBasicBlock(func, "entry");
+        (*ctx.builder).setBlock(blk);
+
+        def result: &Statements.TopStatement.export(data.body, ctx);
+
+        if (!*ctx.returned) {
+            (*ctx.builder).buildVoidRet();
+        }
+
+        if (*result.isErr) {
+            result.errv.print();
+            return func;
+        }
+
+        (*ctx.builder).setBlock(oldblk);
+        ctx.returned = oldret;
+
+        return func;
+    }
+};

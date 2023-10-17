@@ -1,0 +1,1601 @@
+def std: import "std";
+
+def Scanner: import "scanner.bam".Scanner;
+def Error: import "error.bam".Error;
+def Token: Scanner.Token;
+def Position: import "position.bam";
+def Statements: import "statements.bam";
+def Functions: import "functions.bam";
+def Nodes: import "nodes.bam";
+def Values: import "values.bam";
+def LLVM: import "lib/llvm.bam";
+
+def printf: extern fn[] -> Void;
+def free: extern fn[] -> Void;
+
+def VisitResult: std.Types.Result(Values.Value, Error);
+
+def TopExpression: class {
+    def Kind: class {
+        def Assignment: 0;
+        def Prop: 1;
+        def OrExpression: 2;
+    };
+
+    def BoxT: std.Types.Box(Self);
+
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop OrExpression;
+    def child: prop BoxT;
+    def prope: prop PropExpression;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def parsed: &PropExpression.parse(scn);
+        if (!*parsed.isErr) {
+            def tmp: new OrExpression = null;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Prop),
+                *tmp,
+                (BoxT)($[(*Void)(null)]),
+                *parsed.okv,
+            ]));
+        }
+
+        def first: &OrExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Equal))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Assignment),
+                *first.okv,
+                BoxT.init(*next.okv),
+            ]));
+        }
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.OrExpression),
+            *first.okv,
+            *tmp,
+        ])); 
+    };
+    
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Assignment)) {
+            return VisitResult.err(Error.TodoError("visit assign"));
+        } else if (*self.kind == u8(Kind.Prop)) {
+            return self.prope.visit(ctx);
+        } else if (*self.kind == u8(Kind.OrExpression)) {
+            return OrExpression.visit(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("visit top"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Assignment)) {
+            def value: &(*self.child.ptr).export(ctx);
+            def assignee: &self.next.export(ctx);
+
+            if (*value.isErr) return *value;
+            if (*assignee.isErr) return *assignee;
+
+            def kind: &assignee.okv.getTypeValue(ctx);
+            def assignKind: &kind.ref(ctx);
+            def casted: &value.okv.tryCast(ctx, assignKind);
+
+            def result: (*ctx.builder).buildStore(
+                casted.getValue(ctx),
+                assignee.okv.getValue(ctx),
+            );
+
+            return *assignee;
+        } else if (*self.kind == u8(Kind.Prop)) {
+            return self.prope.visit(ctx);
+        } else if (*self.kind == u8(Kind.OrExpression)) {
+            return OrExpression.export(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export top"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Assignment)) {
+            BoxT.`drop`(self.child);
+            OrExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.OrExpression)) {
+            OrExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free top %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def PropExpression: class {
+    def pos: prop Position.FileRange;
+    def kind: prop *Void;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+    
+        if ((&scn.matchNext(u8(Token.Kind.Prop))).is_some()) {
+            def top: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
+            def tmp: &TopExpression.parse(scn);
+
+            if (*tmp.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*tmp.errv);
+            }
+
+            top = *tmp.okv;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                top,
+            ]));
+        }
+
+        def pos: *(&scn.next()).val.pos;
+
+        scn.setCheckpoint(start);
+        return PrsResult.err(Error.ParseError("expected prop", pos));
+    };
+    
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def kind: &(*TopExpression)(*self.kind).visit(ctx);
+        if (*kind.isErr) {
+            return *kind;
+        }
+
+        return VisitResult.ok(Values.Value.newProp(*kind.okv));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Assignment)) {
+            TopExpression.`drop`((*TopExpression)(*self.kind));
+            free(*self.kind);
+
+            return;
+        }
+
+        printf("failed to free prop");
+
+        return;
+    };
+};
+
+def OrExpression: class {
+    def Kind: class {
+        def Or: 0;
+        def AndExpression: 1;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop AndExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def first: &AndExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Bar))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Or),
+                *first.okv,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.AndExpression),
+            *first.okv,
+            *tmp,
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Or)) {
+            return VisitResult.err(Error.TodoError("visit assign"));
+        } else if (*self.kind == u8(Kind.AndExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export or"));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Or)) {
+            return VisitResult.err(Error.TodoError("export assign"));
+        } else if (*self.kind == u8(Kind.AndExpression)) {
+            return self.next.export(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export or"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Or)) {
+            BoxT.`drop`(self.child);
+            AndExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.AndExpression)) {
+            AndExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free or %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def AndExpression: class {
+    def Kind: class {
+        def And: 0;
+        def CompareExpression: 1;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop CompareExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def first: &CompareExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Ampersand))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.And),
+                *first.okv,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.CompareExpression),
+            *first.okv,
+            *tmp,
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.And)) {
+            return VisitResult.err(Error.TodoError("visit assign"));
+        } else if (*self.kind == u8(Kind.CompareExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("visit and"));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.And)) {
+            return VisitResult.err(Error.TodoError("export assign"));
+        } else if (*self.kind == u8(Kind.CompareExpression)) {
+            return self.next.export(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export and"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.And)) {
+            BoxT.`drop`(self.child);
+            CompareExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.CompareExpression)) {
+            CompareExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free and %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def CompareExpression: class {
+    def Kind: class {
+        def Eql: 0;
+        def NotEql: 1;
+        def Less: 2;
+        def Greater: 3;
+        def TermExpression: 4;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop TermExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def first: &TermExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.EqualEqual))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Eql),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.ExclaimEqual))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.NotEql),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Lt))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Less),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.Gt))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Greater),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.TermExpression),
+            *first.okv,
+            *tmp,
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Eql)) {
+            return VisitResult.err(Error.TodoError("visit eql"));
+        } else if (*self.kind == u8(Kind.TermExpression)) {
+            return TermExpression.visit(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("visit comp"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Eql)) {
+            return VisitResult.err(Error.TodoError("export eql"));
+        } else if (*self.kind == u8(Kind.TermExpression)) {
+            return TermExpression.export(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export comp"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Eql)) {
+            BoxT.`drop`(self.child);
+            TermExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.TermExpression)) {
+            TermExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free compare %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def TermExpression: class {
+    def Kind: class {
+        def Add: 0;
+        def Sub: 1;
+        def FactorExpression: 2;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop FactorExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def first: &FactorExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Minus))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Sub),
+                *first.okv,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.Plus))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Add),
+                *first.okv,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.FactorExpression),
+            *first.okv,
+            *tmp
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Add)) {
+            def a: &self.next.visit(ctx);
+            def b: &Self.visit(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+
+            return a.okv.add(ctx, b.okv);
+        } else if (*self.kind == u8(Kind.FactorExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("visit function"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Add)) {
+            def a: &self.next.export(ctx);
+            def b: &Self.export(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.add(ctx, b.okv);
+        } else if (*self.kind == u8(Kind.FactorExpression)) {
+            return self.next.export(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("export function"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Add)) {
+            BoxT.`drop`(self.child);
+            FactorExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.FactorExpression)) {
+            FactorExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free term %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def FactorExpression: class {
+    def Kind: class {
+        def Mod: 0;
+        def Div: 1;
+        def Mul: 2;
+        def Xor: 3;
+        def UnaryExpression: 4;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop UnaryExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def first: &UnaryExpression.parse(scn);
+        if (*first.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*first.errv);
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.Percent))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Mod),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.Slash))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Div),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.Star))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Mul),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.Caret))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Xor),
+                *first.okv,
+                BoxT.init(*next),
+            ])); 
+        }
+
+        def tmp: new BoxT = null;
+
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.UnaryExpression),
+            *first.okv,
+            *tmp,
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Mul)) {
+            return VisitResult.err(Error.TodoError("visit mul"));
+        } else if (*self.kind == u8(Kind.UnaryExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("factor visit"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Mul)) {
+            return VisitResult.err(Error.TodoError("export mul"));
+        } else if (*self.kind == u8(Kind.UnaryExpression)) {
+            return UnaryExpression.export(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("factor export"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.Mul)) {
+            BoxT.`drop`(self.child);
+            UnaryExpression.`drop`(self.next);
+
+            return;
+        } else if (*self.kind == u8(Kind.UnaryExpression)) {
+            UnaryExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free factor %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def UnaryExpression: class {
+    def Kind: class {
+        def Ref: 0;
+        def Deref: 1;
+        def Not: 2;
+        def CallExpression: 3;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def next: prop CallExpression;
+    def child: prop BoxT;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        if ((&scn.matchNext(u8(Token.Kind.Star))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            def first: new CallExpression = null;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Deref),
+                *first,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
+        def next: &CallExpression.parse(scn);
+        if (*next.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*next.errv);
+        }
+
+        def tmp: new BoxT = null;
+        
+        return PrsResult.ok(Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.CallExpression),
+            *next.okv,
+            *tmp
+        ])); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Deref)) {
+            def next: &UnaryExpression.export(*self.child.ptr, ctx);
+            if (*next.isErr) {
+                return VisitResult.err(*next.errv);
+            }
+
+            return next.okv.deref(ctx);
+        } else if (*self.kind == u8(Kind.CallExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("unary visit"));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Deref)) {
+            def next: &UnaryExpression.export(*self.child.ptr, ctx);
+            if (*next.isErr) {
+                return VisitResult.err(*next.errv);
+            }
+
+            return next.okv.deref(ctx);
+        } else if (*self.kind == u8(Kind.CallExpression)) {
+            return CallExpression.export(self.next, ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("unary export"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.CallExpression)) {
+            CallExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free unary %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def CallExpression: class {
+    def Kind: class {
+        def Call: 0;
+        def Access: 1;
+        def Index: 2;
+        def PrimaryExpression: 3;
+    };
+
+    def CallData: class {
+        def ArgsT: std.Types.ArrayList(*Void);
+
+        def args: prop ArgsT;
+    };
+
+    def BoxT: std.Types.Box(Self);
+    
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def base: prop BoxT;
+    def args: prop *Void;
+    def next: prop PrimaryExpression;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def next: &PrimaryExpression.parse(scn);
+        if (*next.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*next.errv);
+        }
+
+        def result: new Self = Self($[
+            start.tok_end.to(scn.tok_end),
+            u8(Kind.PrimaryExpression),
+            BoxT($[(*Void)(null)]),
+            (*Void)(null),
+            *next.okv,
+        ]);
+
+        def done: new Bool = Bool(false);
+
+        def tmp_start: new Scanner.Checkpoint;
+
+        while (!*done) {
+            done = Bool(true);
+            tmp_start = scn.getCheckpoint();
+            
+            {
+                def ident: &scn.matchNext(u8(Token.Kind.Dot));
+                if (ident.is_some()) {
+                    def ident: &scn.matchNext(u8(Token.Kind.Identifier));
+                    if (ident.is_some()) {
+                        done = Bool(false);
+
+                        def SliceT: comptime {
+                            return std.Types.Slice(u8);
+                        };
+
+                        def slice: (*SliceT)(std.Types.malloc(SliceT.SIZE));
+                        slice = *ident.val.value;
+
+                        def tmp: new PrimaryExpression;
+                        tmp = null;
+
+                        result = Self($[
+                            start.tok_end.to(scn.tok_end),
+                            u8(Kind.Access),
+                            BoxT.init(*result),
+                            slice,
+                            *tmp,
+                        ]);
+                    } else {
+                        scn.setCheckpoint(tmp_start);
+                    }
+                } else {
+                    scn.setCheckpoint(tmp_start);
+                }
+            }
+            
+            {
+                def ident: &scn.matchNext(u8(Token.Kind.LeftParen));
+                if (ident.is_some()) {
+                    def bad: new Bool = Bool(false);
+
+                    def args: (*CallData)(std.Types.malloc(CallData.SIZE));
+                    args.args.init();
+
+                    while (!*bad & (&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+                        if (scn.isAtEnd()) {
+                            bad = Bool(true);
+                        }
+
+                        def expr: &TopExpression.parse(scn);
+                        if (*expr.isErr) {
+                            bad = Bool(true);
+                        }
+
+                        if ((&scn.matchNext(u8(Token.Kind.Comma))).is_none()) {
+                            def cp: &scn.getCheckpoint();
+                            if ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+                                bad = Bool(true);
+                            }
+
+                            scn.setCheckpoint(cp);
+                        }
+
+                        def appends: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
+                        appends = *expr.okv;
+
+                        args.args.push(appends);
+                    }
+
+                    if (!*bad) {
+                        done = Bool(false);
+                        
+                        def tmp: new PrimaryExpression;
+                        tmp = null;
+
+                        result = Self($[
+                            start.tok_end.to(scn.tok_end),
+                            u8(Kind.Call),
+                            BoxT.init(*result),
+                            (*Void)(args),
+                            *tmp,
+                        ]);
+                    } else {
+                        scn.setCheckpoint(tmp_start);
+                    }
+                }
+            }
+        }
+
+        scn.setCheckpoint(tmp_start);
+
+        return PrsResult.ok(*result); 
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Call)) {
+            return VisitResult.err(Error.TodoError("visit call"));
+        } else if (*self.kind == u8(Kind.PrimaryExpression)) {
+            return self.next.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("call visit"));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Call)) {
+            def value: &Self.export(*self.base.ptr, ctx);
+            if (*value.isErr) {
+                return VisitResult.err(*value.errv);
+            }
+            
+            def callData: (*CallData)(*self.args);
+
+            def args: new comptime {
+                return std.Types.ArrayList(Values.Value);
+            };
+            args.init();
+
+            def i: new usize = usize(0);
+
+            while (*i < callData.args.len()) {
+                def res: &(*TopExpression)(*callData.args[*i]).export(ctx);
+                if (*res.isErr) {
+                    return *res;
+                }
+
+                args.push(*res.okv);
+
+                i = *i + usize(1);
+            }
+             
+            return Values.Value.call(value.okv, ctx, args);
+        } else if (*self.kind == u8(Kind.Access)) {
+            def base: &Self.export(*self.base.ptr, ctx);
+            if (*base.isErr) {
+                return *base;
+            }
+
+            def result: base.okv.getChild(ctx, *self.args);
+
+            result.export(ctx);
+            
+            return VisitResult.ok(*result);
+        } else if (*self.kind == u8(Kind.PrimaryExpression)) {
+            return self.next.export(ctx);
+        }
+
+        printf("%d\n", *self.kind);
+        
+        return VisitResult.err(Error.Unreachable("call export"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.PrimaryExpression)) {
+            PrimaryExpression.`drop`(self.next);
+
+            return;
+        }
+
+        printf("failed to free call %d\n", *self.kind);
+
+        return;
+    };
+};
+
+def FunctionData: class {
+    def Param: class {
+        def name: prop std.Types.Slice(u8);
+        def value: prop TopExpression;
+    
+        def `drop`: fn[self: *Self] -> Void {
+            TopExpression.`drop`(self.value);
+
+            return;
+        };
+    };
+
+    def OutputType: std.Types.Option(TopExpression);
+    def InputType: std.Types.ArrayList(Param);
+   
+    def isExtern: prop Bool;
+    def output: prop OutputType;
+    def input: prop InputType;
+
+    def body: prop Statements.TopStatement;
+
+    def `drop`: fn[self: *Self] -> Void {
+        printf(":(\n");
+        //InputType.`drop`(self.input);
+        //OutputType.`drop`(self.output);
+        //TopStatement.`drop`(self.body);
+
+        return;
+    };
+};
+
+def ClassData: class {
+    def DefnType: std.Types.ArrayList(Nodes.DefinitionNode);
+
+    def defns: prop DefnType;
+    
+    def `drop`: fn[self: *Self] -> Void {
+        printf(":(\n");
+        //DefnType.`drop`(self.defns);
+
+        return;
+    };
+};
+
+def PrimaryExpression: class {
+    def Kind: class {
+        def ConstInt: 0;
+        def ConstReal: 1;
+        def ConstString: 2;
+        def KClass: 3;
+        def Function: 4;
+        def Ident: 5;
+        def Paren: 6;
+        def Import: 7;
+        def New: 8;
+        def Dollar: 9;
+        def Comptime: 10;
+        def Emit: 11;
+        def Drop: 12;
+    };
+
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def slice: prop std.Types.Slice(u8);
+    def data: prop *Void;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+     
+        { 
+            // identifier
+            def ident: &scn.matchNext(u8(Token.Kind.Identifier));
+            if (ident.is_some()) {
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Ident),
+                    *ident.val.value,
+                    (*Void)(null),
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+     
+        {
+            // number, rn all are const ints
+            def num: &scn.matchNext(u8(Token.Kind.Number));
+            if (num.is_some()) {
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.ConstInt),
+                    *num.val.value,
+                    (*Void)(null),
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+
+        {
+            // string
+            def num: &scn.matchNext(u8(Token.Kind.String));
+            if (num.is_some()) {
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.ConstString),
+                    *num.val.value,
+                    (*Void)(null),
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+
+        {
+            def ident: &scn.matchNext(u8(Token.Kind.Import));
+            if (ident.is_some()) {
+                def ident: &scn.matchNext(u8(Token.Kind.String));
+                if (ident.is_none()) {
+                    scn.setCheckpoint(start);
+                    return PrsResult.err(Error.ParseError("no word after include", ident.val.pos));
+                }
+
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Import),
+                    *ident.val.value,
+                    (*Void)(null),
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+
+        {
+            def ident: &scn.matchNext(u8(Token.Kind.LeftParen));
+            if (ident.is_some()) {
+                def top: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
+                def tmp: &TopExpression.parse(scn);
+                if (*tmp.isErr) {
+                    scn.setCheckpoint(start);
+                    return PrsResult.err(Error.ParseError("expected expr in paren", ident.val.pos));
+                }
+
+                top = *tmp.okv;
+
+                def ident: &scn.matchNext(u8(Token.Kind.RightParen));
+                if (ident.is_none()) {
+                    scn.setCheckpoint(start);
+                    return PrsResult.err(Error.ParseError("unclosed `(`", ident.val.pos));
+                }
+
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Paren),
+                    "",
+                    top,
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+        
+        {
+            def ident: &scn.matchNext(u8(Token.Kind.KClass));
+            if (ident.is_some()) {
+                if ((&scn.matchNext(u8(Token.Kind.LeftBrace))).is_some()) {
+                    def data: (*ClassData)(std.Types.malloc(ClassData.SIZE));
+                    data.defns.init();
+            
+                    while ((&scn.matchNext(u8(Token.Kind.RightBrace))).is_none()) {
+                        if (scn.isAtEnd()) {
+                            scn.setCheckpoint(start);
+
+                            return PrsResult.err(Error.ParseError("unclosed `{`", *(&scn.next()).val.pos));
+                        }
+
+                        def defn: &Nodes.DefinitionNode.parse(scn);
+                        if (*defn.isErr) {
+                            scn.setCheckpoint(start);
+
+                            return PrsResult.err(*defn.errv);
+                            //return PrsResult.err(Error.ParseError("expected def in class", *ident.val.pos));
+                        }
+
+                        data.defns.append(*defn.okv);
+                    }
+
+                    return PrsResult.ok(Self($[
+                        start.tok_end.to(scn.tok_end),
+                        u8(Kind.KClass),
+                        "",
+                        data,
+                    ]));
+                }
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+        
+        {
+            def ident: &scn.matchNext(u8(Token.Kind.New));
+            if (ident.is_some()) {
+                def top: (*OrExpression)(std.Types.malloc(OrExpression.SIZE));
+                def tmp: &OrExpression.parse(scn);
+                if (*tmp.isErr) {
+                    scn.setCheckpoint(start);
+                    return PrsResult.err(Error.ParseError("expected expr after new", ident.val.pos));
+                }
+
+                top = *tmp.okv;
+
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.New),
+                    "",
+                    top,
+                ]));
+            }
+                    
+            scn.setCheckpoint(start);
+        }
+
+        {
+            // function definition
+            def isExtern: (&scn.matchNext(u8(Token.Kind.Extern))).is_some();
+            if ((&scn.matchNext(u8(Token.Kind.Fn))).is_some()) {
+                def funcData: (*FunctionData)(std.Types.malloc(FunctionData.SIZE));
+                funcData.input.init();
+                funcData.output = FunctionData.OutputType.none();
+                funcData.isExtern = isExtern;
+
+                if ((&scn.matchNext(u8(Token.Kind.LeftParen))).is_some()) {
+                    while ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+                        if (scn.isAtEnd()) {
+                            scn.setCheckpoint(start);
+
+                            return PrsResult.err(Error.ParseError("unclosed `(`", *(&scn.next()).val.pos));
+                        }
+
+                        def name: &scn.next();
+                        if ((&scn.matchNext(u8(Token.Kind.Colon))).is_none()) {
+                            def pos: *(&scn.next()).val.pos;
+                            scn.setCheckpoint(start);
+
+                            return PrsResult.err(Error.ParseError("expected `:` after function param name", pos));
+                        }
+
+                        def expr: &TopExpression.parse(scn);
+                        if (*expr.isErr) {
+                            def pos: *(&scn.next()).val.pos;
+                            scn.setCheckpoint(start);
+
+                            return PrsResult.err(Error.ParseError("Expected expression", pos));
+                        }
+
+                        if ((&scn.matchNext(u8(Token.Kind.Comma))).is_none()) {
+                            def cp: &scn.getCheckpoint();
+                            if ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+                                return PrsResult.err(Error.ParseError("Function params are `,` seperated", *(&scn.next()).val.pos));
+                            }
+
+                            scn.setCheckpoint(cp);
+                        }
+
+                        def appends: (*FunctionData.Param)(std.Types.malloc(FunctionData.Param.SIZE));
+                        appends = FunctionData.Param($[*name.val.value, *expr.okv]);
+
+                        funcData.input.push(appends);
+                    }
+                }
+
+                if ((&scn.matchNext(u8(Token.Kind.Arrow))).is_some()) {
+                    def result: &TopExpression.parse(scn);
+                    if (*result.isErr) {
+                        scn.setCheckpoint(start);
+
+                        return PrsResult.err(*result.errv);
+                    }
+                
+                    funcData.output = FunctionData.OutputType.some(*result.okv);
+                }
+
+                if (!isExtern) {
+                    def stmt: &Statements.TopStatement.parse(scn);
+                    if (*stmt.isErr) {
+                        scn.setCheckpoint(start);
+
+                        return PrsResult.err(*stmt.errv);
+                    }
+
+                    funcData.body = *stmt.okv;
+                }
+                
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Function),
+                    "",
+                    (*Void)(funcData),
+                ]));
+            }
+
+            scn.setCheckpoint(start);
+        }
+
+        return PrsResult.err(Error.ParseError("expected primary value", *(&scn.next()).val.pos));
+    };
+
+    def ToVisitType: std.Types.ArrayList(std.Types.Slice(u8));
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.ConstInt)) {
+            def str: new std.Types.String;
+            str = std.Types.String.fromSlice(*self.slice);
+
+            def result: Values.Value.newConstInt(str.toInt());
+
+            return VisitResult.ok(result);
+        } else if (*self.kind == u8(Kind.Function)) {
+            def data: (*FunctionData)(*self.data);
+            
+            def output: new comptime {
+                return std.Types.Option(Values.Value);
+            };
+
+            output = comptime {
+                return std.Types.Option(Values.Value);
+            }.none();
+
+            if (data.output.is_some()) {
+                def op: &TopExpression.visit(data.output.val, ctx);
+                if (*op.isErr) {
+                    return VisitResult.err(*op.errv);
+                }
+
+                output = comptime {
+                    return std.Types.Option(Values.Value);
+                }.some(*op.okv);
+            }
+
+            def result: &Values.Value.newFunction(
+                *output,
+                *data.body,
+                *data.isExtern,
+            );
+
+            if (*data.isExtern) {
+                def name: std.Types.String.from("");
+                Functions.getImpl(result, ctx, name);
+            }
+
+            return VisitResult.ok(*result);
+        } else if (*self.kind == u8(Kind.Paren)) {
+            return (*TopExpression)(*self.data).visit(ctx);
+        } else if (*self.kind == u8(Kind.KClass)) {
+            def i: new usize = usize(0);
+            def result: &Values.Value.newClass();
+            def resultData: (*Values.Value.ClassData)(*result.data);
+
+            def data: (*ClassData)(*self.data);
+            def toVisit: new ToVisitType;
+            toVisit.init();
+            
+            def prop_id: new usize = usize(0);
+
+            while (*i < data.defns.len()) {
+                def value: (*Values.Value)(std.Types.malloc(Values.Value.SIZE));
+
+                if (*data.defns[*i].value.kind == u8(TopExpression.Kind.Prop)) {
+                    def tmp: &data.defns[*i].value.visit(ctx);
+                    if (*tmp.isErr) {
+                        return *tmp;
+                    } 
+
+                    value = *tmp.okv;
+                        
+                    def propData: (*Values.Value.PropData)(*value.data);
+                    propData.id = *prop_id;
+                    
+                    prop_id = *prop_id + usize(1);
+                } else {
+                    value = Values.Value.unvisited(data.defns[*i].value, *data.defns[*i].name);
+
+                    if (*data.defns[*i].entry) {
+                        toVisit.push(*data.defns[*i].name);
+                    }
+                }
+
+                resultData.values.put(
+                    *data.defns[*i].name,
+                    Values.Value.link(value),
+                );
+                
+                ctx.addLocal(
+                    *data.defns[*i].name,
+                    Values.Value.link(value),
+                );
+
+                i = *i + usize(1);
+            }
+
+            resultData.len = *prop_id;
+            
+            def j: new usize = usize(0);
+            while (*j < toVisit.len()) {
+                def p: resultData.values.get(*toVisit[*j]);
+
+                Values.Value.export(p, ctx);
+
+                p.setName(*toVisit[*j]);
+
+                j = *j + usize(1);
+            }
+
+            return VisitResult.ok(*result);
+        } else if (*self.kind == u8(Kind.New)) {
+            def kind: OrExpression.visit(*self.data, ctx);
+
+            return VisitResult.err(Error.TodoError("New visit"));
+        } else if (*self.kind == u8(Kind.Ident)) {
+            def local: ctx.getLocal(*self.slice);
+            if (local == (*Values.Value)(null)) {
+                return VisitResult.err(Error.NoLocalError(self.slice, *self.pos));
+            }
+
+            local.visit(ctx);
+
+            return VisitResult.ok(*local);
+        }
+
+        return VisitResult.err(Error.Unreachable("primary visit"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.ConstInt)) {
+            return Self.visit(self, ctx);
+        } else if (*self.kind == u8(Kind.Function)) {
+            def data: (*FunctionData)(*self.data);
+           
+            def output: new comptime {
+                return std.Types.Option(Values.Value);
+            };
+
+            output = comptime {
+                return std.Types.Option(Values.Value);
+            }.none();
+
+            if (data.output.is_some()) {
+                def op: &TopExpression.visit(data.output.val, ctx);
+                if (*op.isErr) {
+                    return VisitResult.err(*op.errv);
+                }
+
+                output = comptime {
+                    return std.Types.Option(Values.Value);
+                }.some(*op.okv);
+            }
+
+            def result: &Values.Value.newFunction(
+                *output,
+                *data.body,
+                *data.isExtern,
+            );
+
+            def name: std.Types.String.from("");
+            Functions.getImpl(result, ctx, name);
+
+            return VisitResult.ok(*result);
+        } else if (*self.kind == u8(Kind.Paren)) {
+            return (*TopExpression)(*self.data).export(ctx);
+        } else if (*self.kind == u8(Kind.New)) {
+            def kind: &OrExpression.visit(*self.data, ctx);
+            if (*kind.isErr) {
+                return VisitResult.err(*kind.errv);
+            }
+
+            def type: kind.okv.getType(ctx);
+            if (type == (LLVM.lType)(null)) {
+                return VisitResult.err(Error.NoTypeError(
+                    "TODO",
+                    *self.pos,
+                ));
+            }
+
+            def alloca: (*ctx.builder).buildAlloca(type, "alloca");
+
+            return VisitResult.ok(Values.Value.newRtValue(
+                alloca,
+                Values.Value.newPtrType(*kind.okv),
+            ));
+        } else if (*self.kind == u8(Kind.Ident)) {
+            return self.visit(ctx);
+        } else if (*self.kind == u8(Kind.KClass)) {
+            return self.visit(ctx);
+        } else if (*self.kind == u8(Kind.ConstString)) {
+            def string_val: (*ctx.context).constString(self.slice);
+            def string: (*ctx.module).addGlobal(string_val.getType(), "Anon");
+
+            string.setInit(string_val);
+
+            return VisitResult.ok(Values.Value.newRtValue(
+                string,
+                Values.Value.newPtrType(
+                    Values.Value.newIntType(u32(8), Bool(false)),
+                ),
+            ));
+        }
+
+        return VisitResult.err(Error.Unreachable("primary export"));
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        if (*self.kind == u8(Kind.ConstInt)) {
+            return;
+        } else if (*self.kind == u8(Kind.Import)) {
+            return;
+        } else if (*self.kind == u8(Kind.KClass)) {
+            ClassData.`drop`((*ClassData)(*self.data));
+
+            free(*self.data);
+           
+            return;
+        } else if (*self.kind == u8(Kind.Function)) {
+            FunctionData.`drop`((*FunctionData)(*self.data));
+
+            free(*self.data);
+
+            return;
+        } else if (*self.kind == u8(Kind.Ident)) {
+            return;
+        }
+
+        printf("failed to free primary %d\n", *self.kind);
+
+        return;
+    };
+};

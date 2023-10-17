@@ -1,0 +1,203 @@
+def std: import "std";
+def Expressions: import "expressions.bam";
+def Position: import "position.bam";
+def Nodes: import "nodes.bam";
+def Values: import "values.bam";
+
+def printf: extern fn[] -> Void;
+
+def VisitResult: std.Types.Result(Values.Value, Error);
+
+def TopStatement: class {
+    def Kind: class {
+        def Block: 0;
+        def Expression: 1;
+        def Definition: 2;
+        def Return: 3;
+    };
+
+    def pos: prop Position.FileRange;
+    def kind: prop u8;
+    def child: prop *Void;
+
+    def ReturnData: std.Types.Option(Expression.TopExpression);
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        def parsed: &BlockStatement.parse(scn);
+        if (!*parsed.isErr) {
+            def expr: (*BlockStatement)(std.Types.malloc(BlockStatement.SIZE));
+            expr = *parsed.okv;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Block),
+                expr,
+            ]));
+        }
+        drop parsed;
+                    
+        scn.setCheckpoint(start);
+        
+        def parsed: &Nodes.DefinitionNode.parse(scn);
+        if (!*parsed.isErr) {
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Definition),
+                (*DefinitionNode)(std.Types.malloc(Nodes.DefinitionNode.SIZE)) = *parsed.okv,
+            ]));
+        }
+
+        drop parsed;
+                    
+        scn.setCheckpoint(start);
+        
+        def parsed: &Expressions.TopExpression.parse(scn);
+        if (!*parsed.isErr) {
+            if ((&scn.matchNext(u8(Token.Kind.SemiColon))).is_none()) {
+                scn.setCheckpoint(start);
+    
+                return PrsResult.err(Error.TodoError("semi colon"));
+            }
+
+            def expr: (*TopExpression)(std.Types.malloc(Expressions.TopExpression.SIZE));
+            expr = *parsed.okv;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Expression),
+                expr,
+            ]));
+        }
+        drop parsed;
+                    
+        scn.setCheckpoint(start);
+
+        if ((&scn.matchNext(u8(Token.Kind.Return))).is_some()) {
+            if ((&scn.matchNext(u8(Token.Kind.SemiColon))).is_some()) {
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Return),
+                    usize(0),
+                ]));
+            }   
+
+            def parsed: &Expressions.TopExpression.parse(scn);
+            if (!*parsed.isErr) {
+                if ((&scn.matchNext(u8(Token.Kind.SemiColon))).is_none()) {
+                    scn.setCheckpoint(start);
+                    return PrsResult.err(Error.TodoError("semi colon"));
+                }
+
+                def body: (*TopExpression)(std.Types.malloc(Expressions.TopExpression.SIZE));
+                body = *parsed.okv;
+
+                return PrsResult.ok(Self($[
+                    start.tok_end.to(scn.tok_end),
+                    u8(Kind.Return),
+                    body,
+                ]));
+            }
+            drop parsed;
+        }
+                    
+        scn.setCheckpoint(start);
+
+        return PrsResult.err(Error.ParseError("expected statement", *(&scn.next()).val.pos));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Expression)) {
+            def data: (*TopExpression)(*self.child);
+
+            return data.export(ctx);
+        } else if (*self.kind == u8(Kind.Definition)) {
+            def data: (*DefinitionNode)(*self.child);
+
+            return data.export(ctx);
+        } else if (*self.kind == u8(Kind.Return)) {
+            if (*self.child == (*Void)(null)) {
+                (*ctx.builder).buildVoidRet();
+
+                def tmp: new Values.Value = null;
+
+                return VisitResult.ok(*tmp);
+            }
+
+            def data: (*TopExpression)(*self.child);
+
+            def res: &data.export(ctx);
+            if (*res.isErr) {
+                return VisitResult.err(*res.errv);
+            }
+
+            ctx.returned = Bool(true);
+
+            (*ctx.builder).buildRet(res.okv.getValue(ctx));
+
+            return *res;
+        } else if (*self.kind == u8(Kind.Block)) {
+            def data: (*BlockStatement)(*self.child);
+
+            return data.export(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("statement export"));
+    };
+};
+
+def BlockStatement: class {
+    def ChildrenType: std.Types.ArrayList(TopStatement); 
+
+    def children: prop ChildrenType;
+    
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        if ((&scn.matchNext(u8(Token.Kind.LeftBrace))).is_some()) {
+            def children: new ChildrenType;
+            children.init();
+
+            while ((&scn.matchNext(u8(Token.Kind.RightBrace))).is_none()) {
+                if (scn.isAtEnd()) {
+                    scn.setCheckpoint(start);
+
+                    return PrsResult.err(Error.ParseError("unclosed `{`", *(&scn.next()).val.pos));
+                }
+
+                def expr: &TopStatement.parse(scn);
+                if (*expr.isErr) {
+                    scn.setCheckpoint(start);
+
+                    return PrsResult.err(Error.ParseError("Expected statemnt", *(&scn.next()).val.pos));
+                }
+
+                children.push(*expr.okv);
+            }
+
+            return PrsResult.ok(Self($[
+                *children,
+            ]));
+        }
+
+        return PrsResult.err(Error.TodoError("parse block"));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def i: new usize = usize(0);
+
+        while (*i < self.children.len()) {
+            def result: &TopStatement.export(self.children[*i], ctx);
+            if (*result.isErr) {
+                return VisitResult.err(*result.errv);
+            }
+
+            i = *i + usize(1);
+        }
+
+        return VisitResult.ok(null);
+    };
+};

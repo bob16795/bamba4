@@ -1,0 +1,625 @@
+def Types: import "types.bam";
+def TopExpression: import "expressions.bam".TopExpression;
+def TopStatement: import "statements.bam".TopStatement;
+def Statements: import "statements.bam";
+def Functions: import "functions.bam";
+def Error: import "error.bam".Error;
+def LLVM: import "lib/llvm.bam";
+
+def Value: class {
+    def Kind: class {
+        def Unvisited: 0;
+        def Link: 1;
+
+        def KClass: 2;
+        def Function: 3;
+        def ConstInt: 4;
+        def IntType: 5;
+        def PtrType: 6;
+        def VoidType: 7;
+        def RtValue: 8;
+        def TypeType: 9;
+        
+        def Prop: 10;
+    };
+
+    def PropData: class {
+        def id: prop u8;
+        def kind: prop Value;
+
+        def `drop`: fn[Self: *Self] -> Void {
+            Self.`drop`(self.kind);
+
+            return;
+        };
+    };
+
+    def UnvisitedData: class {
+        def top: prop TopExpression;
+        def name: prop std.Types.Slice(u8);
+
+        def `drop`: fn[Self: *Self] -> Void {
+            TopExpression.`drop`(self.top);
+
+            return;
+        };
+    };
+
+    def IntTypeData: class {
+        def size: prop u32;
+        def signed: prop Bool;
+
+        def `drop`: fn[Self: *Self] -> Void {
+            return;
+        };
+    };
+
+    def FunctionData: class {
+        def Param: class {
+            def name: prop std.Types.Slice(u8);
+            def value: prop Value;
+        };
+    
+        def OutputType: std.Types.Option(Value);
+        def InputType: std.Types.ArrayList(Param);
+
+        def ImplType: std.Types.HashMap(std.Types.Slice(u8), LLVM.lValue);
+       
+        def isExtern: prop Bool;
+        def output: prop OutputType;
+        def input: prop InputType;
+        def impls: prop ImplType;
+        def kind: prop LLVM.lType;
+    
+        def body: prop TopStatement;
+        def name: prop std.Types.Slice(u8);
+
+        def `drop`: fn[Self: *Self] -> Void {
+            OutputType.`drop`(self.output);
+            InputType.`drop`(self.input);
+            ImplType.`drop`(self.impls);
+
+            if (!*self.isExtern) {
+                TopExpression.`drop`(self.body);
+            }
+
+            return;
+        };
+    };
+    
+    def RtData: class {
+        def value: prop LLVM.lValue;
+        def kind: prop Value;
+    };
+
+    def ClassData: class {
+        def ValuesT: std.Types.HashMap(std.Types.Slice(u8), Value);
+        def NameT: std.Types.Slice(u8);
+
+        def values: prop ValuesT;
+        def name: prop NameT;
+        def kind: prop LLVM.lType;
+        def len: prop u8;
+    };
+
+    def kind: prop u8;
+    def data: prop *Void;
+
+    def print: fn[self: *Self] -> Void {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        std.Types.printf("value of %d", *self.kind);
+
+        return;
+    };
+
+    def isPointerTo: fn[self: *Self, to: *Self] -> Bool {
+        return Bool(false);
+    };
+    
+    def newProp: fn[kind: Value] -> Self {
+        def data: (*PropData)(std.Types.malloc(PropData.SIZE));
+        data.id = u8(0);
+        data.kind = kind;
+
+        return Self($[u8(Kind.Prop), (*Void)(data)]);
+    };
+
+
+    def newRtValue: fn[value: LLVM.lValue, kind: Value] -> Self {
+        def data: (*RtData)(std.Types.malloc(RtData.SIZE));
+        data.value = value;
+        data.kind = kind;
+
+        return Self($[u8(Kind.RtValue), (*Void)(data)]);
+    };
+
+    def newPtrType: fn[child: Value] -> Self {
+        def data: (*Value)(std.Types.malloc(Value.SIZE));
+        data = child;
+
+        return Self($[u8(Kind.PtrType), (*Void)(data)]);
+    };
+
+    def newClass: fn[] -> Self {
+        def data: (*ClassData)(std.Types.malloc(ClassData.SIZE));
+        data.name = ClassData.NameT.initFrom("Anon", usize(4));
+        data.values = ClassData.ValuesT.init();
+        data.kind = null;
+        data.len = u8(0);
+
+        return Self($[u8(Kind.KClass), (*Void)(data)]);
+    };
+
+    def newFunction: fn[
+        output: std.Types.Option(Value),
+        body: TopStatement,
+        isExtern: Bool
+    ] -> Self {
+        def data: (*FunctionData)(std.Types.malloc(FunctionData.SIZE));
+        data.isExtern = isExtern;
+        data.body = body;
+        data.name = ClassData.NameT.initFrom("Anon", usize(4));
+        data.output = output;
+        data.impls = (*data.impls).TYPE.init();
+
+        return Self($[u8(Kind.Function), (*Void)(data)]);
+    };
+
+    def newConstInt: fn[data: usize] -> Self {
+        return Self($[u8(Kind.ConstInt), (*Void)(data)]);
+    };
+
+    def newIntType: fn[size: u32, signed: Bool] -> Self {
+        def data: (*IntTypeData)(std.Types.malloc(IntTypeData.SIZE));
+        data.size = size;
+        data.signed = signed;
+
+        return Self($[u8(Kind.IntType), (*Void)(data)]);
+    };
+
+    def newVoidType: fn[] -> Self {
+        return Self($[u8(Kind.VoidType), (*Void)(null)]);
+    };
+    
+    def newTypeType: fn[] -> Self {
+        return Self($[u8(Kind.TypeType), (*Void)(null)]);
+    };
+    
+    def unvisited: fn[top: *TopExpression, name: std.Types.Slice(u8)] -> Self {
+        def data: (*UnvisitedData)(std.Types.malloc(UnvisitedData.SIZE));
+        data.top = *top;
+        data.name = name;
+
+        return Self($[u8(Kind.Unvisited), (*Void)(data)]);
+    };
+    
+    def link: fn[data: *Self] -> Self {
+        return Self($[u8(Kind.Link), (*Void)(data)]);
+    };
+    
+    def getChild: fn[self: *Self, ctx: *Values.Context, name: *std.Types.Slice(u8)] -> *Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.KClass)) {
+            def data: (*ClassData)(*self.data);
+            def result: data.values.get(*name);
+
+            if (result != (*Self)(null)) {
+                return result;
+            }
+        }
+
+        std.Types.printf("bad parent %d", *self.kind);
+        name.print();
+        std.Types.printf("\n");
+
+        return (*Self)(null);
+    };
+    
+    def getValue: fn[self: *Self, ctx: *Values.Context] -> LLVM.lValue {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+
+            return *data.value;
+        }
+
+        std.Types.printf("bad value %d\n", *self.kind);
+
+        return (LLVM.lValue)(null);
+    };
+    
+    def tryCast: fn[self: *Self, ctx: *Values.Context, type: *Self] -> Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+            
+            return newRtValue(
+                *data.value,
+                *type,
+            );
+        } if (*self.kind == u8(Kind.ConstInt)) {
+            def data: (usize)(*self.data);
+
+            return newRtValue(
+                type.getType(ctx).constInt(data, Bool(false)),
+                *type,
+            ); 
+        }
+
+
+        std.Types.printf("bad cast %d\n", *self.kind);
+
+        def tmp: new Self;
+        tmp = null;
+
+        return *tmp;
+    };
+    
+    def getTypeValue: fn[self: *Self, ctx: *Values.Context] -> Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+
+            return *data.kind;
+        }
+
+        std.Types.printf("bad value %d\n", *self.kind);
+
+        return (LLVM.lValue)(null);
+    };
+    
+    def ref: fn[self: *Self, ctx: *Values.Context] -> Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.PtrType)) {
+            def data: (*Self)(*self.data);
+
+            return *data;
+        }
+
+        std.Types.printf("bad pointer %d\n", *self.kind);
+
+        return (LLVM.lValue)(null);
+    };
+
+    def getType: fn[self: *Self, ctx: *Values.Context] -> LLVM.lType {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.IntType)) {
+            def data: (*IntTypeData)(*self.data);
+
+            return (*ctx.context).intType(*data.size);
+        }
+
+        if (*self.kind == u8(Kind.PtrType)) {
+            def data: (*IntTypeData)(*self.data);
+
+            return (*ctx.context).pointerType(u32(0));
+        }
+
+        if (*self.kind == u8(Kind.KClass)) {
+            def data: (*ClassData)(*self.data);
+
+            if (*data.kind != (LLVM.lType)(null)) {
+                return *data.kind;
+            }
+
+            def str: new std.Types.String;
+            str = std.Types.String.fromSlice(*data.name);
+            str.base.append(u8(0));
+
+            data.kind = (*ctx.context).createNamedStruct(*str.base.items.ptr);
+
+            def i: new usize = usize(0);
+
+            def NodeT: ((*data.values).TYPE).EntryElem.Node;
+            def body: new comptime {
+                return std.Types.ArrayList(LLVM.lType);
+            };
+            body.init();
+            body.ensureLen(*data.len);
+
+            while (*i < usize(128)) {
+                def entry: data.values.entrys[*i];
+                def current: new *NodeT = *entry.head;
+
+                while (*current != (*NodeT)(null)) {
+                    def tdata: new *Self = (*current).data.value;
+                    while (*(*tdata).kind == u8(Kind.Link))
+                        tdata = *(*tdata).data;
+                    def link: *tdata;
+
+                    if (*link.kind == u8(Kind.Prop)) {
+                        def tdata: (*PropData)(*link.data);
+
+                        body[*tdata.id] = tdata.kind.getType(ctx);
+                    }
+
+                    current = *(*current).next;
+                }
+                
+                i = *i + usize(1);
+            }
+
+            (*data.kind).setBody(body.items);
+
+            return *data.kind;
+        }
+
+        return (LLVM.lType)(null);
+    };
+
+    def setName: fn[self: *Self, name: std.Types.Slice(u8)] -> Void {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.Function)) {
+            // TODO: implement
+            def word: comptime {
+                return std.Types.Slice(u8);
+            }($["", usize(0)]);
+            def data: (*FunctionData)(*self.data);
+
+            data.name = name;
+
+            def func: data.impls.get(word);
+
+            if (func != (*LLVM.lValue)(null)) {
+                (*func).setName(&name);
+            }
+        } else if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+
+            (*data.value).setName(&name);
+        } else if (*self.kind == u8(Kind.KClass)) {
+            def data: (*ClassData)(*self.data);
+
+            data.name = name;
+        }
+
+        return;
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> *Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        def exit: extern fn[] -> Void;
+
+        if (*self.kind == u8(Kind.Unvisited)) {
+            def data: (*UnvisitedData)(*self.data);
+
+            def res: &TopExpression.visit(data.top, ctx);
+            if (*res.isErr) {
+                res.errv.print();
+                exit(u8(1));
+            }
+            self = *res.okv;
+
+            self.setName(*data.name);
+        }
+
+        return self;
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> *Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        def exit: extern fn[] -> Void;
+
+        if (*self.kind == u8(Kind.Unvisited)) {
+            def data: (*UnvisitedData)(*self.data);
+
+            def res: &TopExpression.export(data.top, ctx);
+            if (*res.isErr) {
+                res.errv.print();
+                exit(u8(1));
+            }
+            self = *res.okv;
+
+            self.setName(*data.name);
+        }
+
+        return self;
+    };
+
+    def VisitResult: std.Types.Result(Value, Error);
+
+    def deref: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+            if (*data.kind.kind != u8(Kind.PtrType)) {
+                return VisitResult.err(Error.Unreachable("deref error"));
+            }
+            def kind: (*Value)(*data.kind.data);
+            def type: Self.getType(kind, ctx);
+            def value: (*ctx.builder).buildLoad(type, *data.value, "Anon");
+
+            return VisitResult.ok(Value.newRtValue(value, *kind));
+        }
+
+        if (*self.kind == u8(Kind.IntType) |
+            *self.kind == u8(Kind.VoidType)) {
+            return VisitResult.ok(Value.newPtrType(*self));
+        }
+
+        std.Types.printf("deref %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("deref export"));
+    };
+    
+    def add: fn[self: *Self, ctx: *Values.Context, other: *Self] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.ConstInt) &
+            *other.kind == u8(Kind.ConstInt)) {
+
+            def a: (usize)(*self.data);
+            def b: (usize)(*other.data);
+
+            return VisitResult.ok(newConstInt(a + b));
+        }
+
+        std.Types.printf("add %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("add export"));
+    };
+
+
+    def call: fn[self: *Self, ctx: *Values.Context, params: *std.Types.ArrayList(Value)] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.Function)) {
+            Values.Value.export(self, ctx);
+
+            def word: comptime {
+                return std.Types.Slice(u8);
+            }($["", usize(0)]);
+            def data: (*FunctionData)(*self.data);
+            def func: Functions.getImpl(self, ctx, word);
+            def outkind: data.output.val.getType(ctx);
+
+            def args: new comptime {
+                return std.Types.ArrayList(LLVM.lValue);
+            };
+            args.init();
+
+            def i: new usize = usize(0);
+
+            while (*i < params.len()) {
+                def res: params[*i].getValue(ctx);
+
+                args.push(res);
+
+                i = *i + usize(1);
+            }
+
+            def value: (*ctx.builder).buildCall(*data.kind, func, args.items, "Anon");
+
+            return VisitResult.ok(Value.newRtValue(value, outkind));
+        } else {
+            if (params.len() == usize(1)) {
+                def cast: &params[usize(0)].tryCast(ctx, self);
+
+                if (*cast.kind != u8(0)) {
+                    return VisitResult.ok(*cast);
+                }
+            }
+        }
+
+        std.Types.printf("call: %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("call export"));
+    };
+};
+
+def Context: class {
+    def LocalsT: std.Types.HashMap(std.Types.Slice(u8), Value);
+    def SliceT: std.Types.Slice(u8);
+    
+    def locals: prop LocalsT;
+    def context: prop LLVM.lContext;
+    def module: prop LLVM.lModule;
+    def builder: prop LLVM.lBuilder;
+    def returned: prop Bool;
+
+    def getLocal: fn[self: *Self, name: std.Types.Slice(u8)] -> *Value {
+        def namePtr: &name;
+       
+        def word: SliceT($["i32", usize(3)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newIntType(u32(32), Bool(true)));
+        }
+        
+        def word: SliceT($["Void", usize(4)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newVoidType());
+        }
+        
+        def word: SliceT($["Type", usize(4)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newTypeType());
+        }
+
+        return self.locals.get(name);
+    };
+
+    def init: fn[] -> Self {
+        def result: new Self;
+        result.locals = LocalsT.init();
+        result.context = LLVM.contextCreate();
+        result.module = (*result.context).createModuleWithName("lol");
+        result.builder = (*result.context).createBuilder();
+
+        return *result;
+    };
+
+    def addLocal: fn[self: *Self, name: std.Types.Slice(u8), value: Value] -> Void {
+        def got: self.locals.get(name);
+
+        if (got == (*Value)(null)) {
+            self.locals.put(name, value);
+            
+            return;
+        } else {
+            //TODO: error
+            std.Types.printf("local exists: ");
+            (&name).print();
+            std.Types.printf("\n");
+            
+            return;
+        }
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        (*self.builder).`drop`();
+        (*self.module).`drop`();
+        (*self.context).`drop`();
+
+        return;
+    };
+};

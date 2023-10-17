@@ -1,0 +1,49 @@
+def std: import "std";
+def Scanner: import "scanner.bam".Scanner;
+def Values: import "values.bam";
+def Nodes: import "nodes.bam";
+
+def readFile: fn[path: std.Types.String] -> std.Types.String {
+    def result: new std.Types.String;
+    def file: new std.Fs.File;
+    file = std.Fs.File.open(path);
+
+    if (*file.ptr == (*Void)(null)) {
+        return std.Types.String.from("Nothing");
+    }
+
+    def result: file.readAll();
+
+    return result;
+};
+
+force def main: fn[] -> i32 {
+    def path: new std.Types.String;
+    path = std.Types.String.from("examples/test0.bam");
+
+    def conts: readFile(*path);
+
+    def scn: new Scanner;
+    scn = Scanner.init(conts, path.clone());
+
+    def fileRes: new Nodes.FileNode.PrsResult = Nodes.FileNode.parse(scn);
+    if (*fileRes.isErr) {
+        fileRes.errv.print();
+
+        return i32(1);
+    }
+    def file: fileRes.okv;
+
+    def ctx: new Values.Context = Values.Context.init();
+
+    def res: &file.visit(ctx);
+    if (*res.isErr) {
+        res.errv.print();
+
+        return i32(1);
+    }
+
+    std.Types.printf("done\n");
+
+    return i32(0);
+};

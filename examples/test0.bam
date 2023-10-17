@@ -1,0 +1,49 @@
+std := import "std";
+
+// a function that takes in nothing
+entry main := fn -> i32 {
+    result: *i32 := new i32 = Foo.value;
+
+    printf("Hello World!");
+    foo();
+
+    tmp := new Foo;
+
+    //al := ArrayList(Foo);
+
+    return *result;
+};
+
+// order dosent matter
+outer_tmp: i32 := 3 + 2;
+
+// a function that returns nothing
+printf := extern fn(string: *u8, params: `...`);
+malloc := extern fn(size: u32) -> *Void;
+
+// a function that takes in nothing and returns nothing
+foo := fn {
+    // returns are optional on void functions
+    printf("test");
+};
+
+Foo := class {
+    a := prop i32;
+    baz := prop Bar;
+
+    value := 3 + 2;
+};
+
+Bar := class {
+    c := prop i32;
+};
+
+//ArrayList := fn(T: Type) -> Type {
+//    return class {
+//        SliceT := Slice(T);
+//
+//        `drop` := fn(self: *Self) {
+//            return;
+//        };
+//    };
+//};

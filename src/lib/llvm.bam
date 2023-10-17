@@ -1,0 +1,196 @@
+def std: import "std";
+
+def lValue: *class{
+    def setName: fn[self: *Self, name: *std.Types.Slice(u8)] -> Void {
+        def LLVMSetValueName2: extern fn[] -> Void;
+    
+        LLVMSetValueName2(self, *name.ptr, *name.len);
+
+        return;
+    };
+
+    def getType: fn[self: *Self] -> lType {
+        def LLVMTypeOf: extern fn[] -> lType;
+
+        return LLVMTypeOf(self);
+    };
+
+    def setInit: fn[self: *Self, value: lValue] -> Void {
+        def LLVMSetInitializer: extern fn[] -> Void;
+
+        return LLVMSetInitializer(self, value);
+    };
+};
+
+def lType: *class{
+    def functionType: fn[self: *Self, input: std.Types.Slice(lType)] -> lType {
+        def LLVMFunctionType: extern fn[] -> lType;
+        def params: &input;
+    
+        return LLVMFunctionType(self, *params.ptr, *params.len, Bool(false));
+    };
+    
+    def constInt: fn[self: *Self, n: usize, sign: Bool] -> lValue {
+        def LLVMConstInt: extern fn[] -> lValue;
+
+        return LLVMConstInt(self, n, Bool(false));
+    };
+
+    def setBody: fn[self: *Self, types: *std.Types.Slice(lType)] -> Void {
+        def LLVMStructSetBody: extern fn[] -> Void;
+        
+        return LLVMStructSetBody(self, *types.ptr, *types.len, Bool(false));
+    };
+};
+
+def lModule: *class{
+    def addFunction: fn[self: *Self, name: *u8[], type: lType] -> lValue {
+        def LLVMAddFunction: extern fn[] -> lValue;
+
+        return LLVMAddFunction(self, name, type);
+    };
+   
+    def addGlobal: fn[self: *Self, type: lType, name: *u8[]] -> lValue {
+        def LLVMAddGlobal: extern fn[] -> lValue;
+
+        return LLVMAddGlobal(self, type, name);
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        def LLVMPrintModuleToString: extern fn[] -> *u8[];
+        def LLVMDisposeModule: extern fn[] -> Void;
+
+        std.Types.printf("%s\n", LLVMPrintModuleToString(self));
+
+        LLVMDisposeModule(self);
+
+        return;
+    };
+};
+
+def lContext: *class{
+    def intType: fn[self: *Self, size: u32] -> lType {
+        def LLVMIntTypeInContext: extern fn[] -> lType;
+
+        return LLVMIntTypeInContext(self, size);
+    };
+    
+    def pointerType: fn[self: *Self, as: u32] -> lType {
+        def LLVMPointerTypeInContext: extern fn[] -> lType;
+
+        return LLVMPointerTypeInContext(self, as);
+    };
+
+    def voidType: fn[self: *Self] -> lType {
+        def LLVMVoidTypeInContext: extern fn[] -> lType;
+
+        return LLVMVoidTypeInContext(self);
+    };  
+
+    def createNamedStruct: fn[self: *Self, name: *u8[]] -> lType {
+        def LLVMStructCreateNamed: extern fn[] -> lType;
+
+        return LLVMStructCreateNamed(self, name);
+    };
+
+    def constString: fn[self: *Self, string: *std.Types.Slice(u8)] -> lValue {
+        def LLVMConstStringInContext: extern fn[] -> lValue;
+
+        return LLVMConstStringInContext(self, *string.ptr, *string.len, Bool(false));
+    };
+
+    def createBuilder: fn[self: *Self] -> lBuilder {
+        def LLVMCreateBuilderInContext: extern fn[] -> lBuilder;
+    
+        return LLVMCreateBuilderInContext(self);
+    };
+
+    def createModuleWithName: fn[self: *Self, name: *u8[]] -> lModule {
+        def LLVMModuleCreateWithNameInContext: extern fn[] -> lModule;
+    
+        return LLVMModuleCreateWithNameInContext(name, self);
+    };
+
+    def appendBasicBlock: fn[self: *Self, func: lValue, name: *u8[]] -> lBlock {
+        def LLVMAppendBasicBlockInContext: extern fn[] -> lBlock;
+
+        return LLVMAppendBasicBlockInContext(self, func, name);
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        def LLVMContextDispose: extern fn[] -> Void;
+
+        LLVMContextDispose(self);
+
+        return;
+    };
+};
+
+def lBuilder: *class {
+    def getBlock: fn[self: *Self] -> lBlock {
+        def LLVMGetInsertBlock: extern fn[] -> lBlock;
+    
+        return LLVMGetInsertBlock(self);
+    };
+
+    def setBlock: fn[self: *Self, blk: lBlock] -> Void {
+        def LLVMPositionBuilderAtEnd: extern fn[] -> Void;
+
+        LLVMPositionBuilderAtEnd(self, blk);
+
+        return;
+    };
+
+    def buildAlloca: fn[self: *Self, type: lType, name: *u8[]] -> lValue {
+        def LLVMBuildAlloca: extern fn[] -> lValue;
+
+        return LLVMBuildAlloca(self, type, name);   
+    };
+
+    def buildLoad: fn[self: *Self, type: lType, value: lValue, name: *u8[]] -> lValue {
+        def LLVMBuildLoad2: extern fn[] -> lValue;
+
+        return LLVMBuildLoad2(self, type, value, name);
+    };
+
+    def buildStore: fn[self: *Self, value: lValue, ptr: lValue] -> lValue {
+        def LLVMBuildStore: extern fn[] -> lValue;
+
+        return LLVMBuildStore(self, value, ptr);
+    };
+
+    def buildCall: fn[self: *Self, type: lType, func: lValue, args: *std.Types.Slice(lValue), name: *u8[]] -> lValue {
+        def LLVMBuildCall2: extern fn[] -> lValue;
+
+        return LLVMBuildCall2(self, type, func, *args.ptr, *args.len, name);
+    };
+    
+    def buildRet: fn[self: *Self, value: lValue] -> Void {
+        def LLVMBuildRet: extern fn[] -> lValue;
+
+        return LLVMBuildRet(self, value);
+    };
+    
+    def buildVoidRet: fn[self: *Self] -> Void {
+        def LLVMBuildRetVoid: extern fn[] -> lValue;
+
+        return LLVMBuildRetVoid(self);
+    };   
+    
+    
+    def `drop`: fn[self: *Self] -> Void {
+        def LLVMDisposeBuilder: extern fn[] -> Void;
+
+        LLVMDisposeBuilder(self);
+
+        return;
+    };
+};
+
+def lBlock: *class {};
+
+def contextCreate: fn[] -> lContext {
+    def LLVMContextCreate: extern fn[] -> lContext;
+
+    return LLVMContextCreate();
+};

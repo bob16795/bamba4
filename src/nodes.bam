@@ -1,0 +1,166 @@
+def std: import "std";
+
+def Scanner: import "scanner.bam".Scanner;
+def Values: import "values.bam";
+def Error: import "error.bam".Error;
+def Token: Scanner.Token;
+
+def Expressions: import "expressions.bam";
+
+def printf: extern fn[] -> Void;
+
+def VisitResult: std.Types.Result(Values.Value, Error);
+
+def DefinitionNode: class {
+    def OptionExpression: std.Types.Option(Expressions.TopExpression);
+
+    def entry: prop Bool;
+    def name: prop std.Types.Slice(u8);
+    def kind: prop OptionExpression;
+    def value: prop Expressions.TopExpression;
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+        def forced: (&scn.matchNext(u8(Token.Kind.Entry))).is_some();
+
+        def name: &scn.matchNext(u8(Token.Kind.Identifier));
+        if (name.is_none()) {
+            def pos: (&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("ident", *pos));
+        }
+
+        def value_expr: &OptionExpression.none();
+        
+        if ((&scn.matchNext(u8(Token.Kind.Colon))).is_some()) {
+            def tmp_expr: &Expressions.TopExpression.parse(scn);
+            if (*tmp_expr.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*tmp_expr.errv);
+            }
+            value_expr = OptionExpression.some(*tmp_expr.okv); 
+        }
+        
+        if ((&scn.matchNext(u8(Token.Kind.ColonEqual))).is_none()) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.TodoError("value missing"));
+        }
+
+        def top_expr: &Expressions.TopExpression.parse(scn);
+        if (*top_expr.isErr) {
+            scn.setCheckpoint(start);
+            return PrsResult.err(*top_expr.errv);
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.SemiColon))).is_none()) {
+            scn.setCheckpoint(start);
+
+            return PrsResult.err(Error.TodoError("semi colon"));
+        }
+
+        return PrsResult.ok(Self($[
+            forced,
+            *name.val.value,
+            *value_expr,
+            *top_expr.okv,
+        ]));
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def val: &Expressions.TopExpression.export(self.value, ctx);
+        if (*val.isErr) {
+            return VisitResult.err(*val.errv);
+        }
+
+        val.okv.setName(*self.name);
+        
+        ctx.addLocal(*self.name, *val.okv);
+
+        return VisitResult.ok(*val.okv);
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        Expressions.TopExpression.`drop`(self.value);
+        OptionExpression.`drop`(self.kind);
+
+        return;
+    };
+};
+
+def FileNode: class {
+    def defs: prop std.Types.ArrayList(DefinitionNode);
+
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def result: new Self = null;
+        result.defs.init();
+
+        while (Bool(true)) {
+            def parsed: &DefinitionNode.parse(scn);
+            if (*parsed.isErr) {
+                if ((&scn.next()).is_none()) {
+                    return PrsResult.ok(*result);
+                } else {
+                    return PrsResult.err(*parsed.errv);
+                }
+            }
+            def parsed: parsed.okv;
+
+            result.defs.push(*parsed);
+        }
+
+        return PrsResult.ok(*result);
+    };
+
+    def ToVisitType: std.Types.ArrayList(std.Types.Slice(u8));
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def i: new usize = usize(0);
+        def result: &Values.Value.newClass();
+        def data: (*Values.Value.ClassData)(*result.data);
+
+        def toVisit: new ToVisitType;
+        toVisit.init();
+
+        while (*i < self.defs.len()) {
+            def value: (*Values.Value)(std.Types.malloc(Values.Value.SIZE));
+            value = Values.Value.unvisited(self.defs[*i].value, *self.defs[*i].name);
+
+            data.values.put(
+                *self.defs[*i].name,
+                Values.Value.link(value),
+            );
+            
+            ctx.addLocal(
+                *self.defs[*i].name,
+                Values.Value.link(value),
+            );
+
+            if (*self.defs[*i].entry) {
+                toVisit.push(*self.defs[*i].name);
+            }
+
+            i = *i + usize(1);
+        }
+        
+        def j: new usize = usize(0);
+        while (*j < toVisit.len()) {
+            def p: data.values.get(*toVisit[*j]);
+
+            Values.Value.export(p, ctx);
+
+            p.setName(*toVisit[*j]);
+
+            j = *j + usize(1);
+        }
+
+        return VisitResult.ok(*result);
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        (*self.defs).TYPE.`drop`(self.defs);
+
+        return;
+    };
+};
