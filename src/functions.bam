@@ -1,8 +1,10 @@
 def std: import "std";
 
 def Value: import "values.bam".Value;
+def Values: import "values.bam";
 def Context: import "values.bam".Context;
 def LLVM: import "lib/llvm.bam";
+def Error: import "error.bam".Error;
 
 def exit: extern fn[] -> Void;
 
@@ -10,13 +12,15 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
     def namePtr: &name;
 
     if (*self.kind != u8(Value.Kind.Function)) {
+        std.Types.printf("%d\n", *self.kind);
         std.Types.printf("Error: impl non function\n");
 
         exit(u32(1));
     }
 
     def data: (*Value.FunctionData)(*self.data);
-    def impl: data.impls.get(*namePtr.base.items);
+
+    def impl: data.impls.get(name);
 
     if (impl != (*LLVM.lValue)(null)) {
         return *impl;
@@ -28,7 +32,17 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
         };
         input.init();
 
-        def funcType: data.output.val.getType(ctx).functionType(
+        def i: new usize = usize(0);
+
+        while (*i < data.input.len()) {
+            if (*data.input[*i].value.kind != u8(Values.Value.Kind.TypeType)) {
+                input.push(data.input[*i].value.getType(data.ctx));
+            }
+
+            i = *i + usize(1);
+        }
+
+        def funcType: data.output.val.getType(data.ctx).functionType(
             *input.items,
         );
 
@@ -38,32 +52,45 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
         str = std.Types.String.fromSlice(*data.name);
         str.base.push(u8(0));
 
-        def func: (*ctx.module).addFunction(*str.base.items.ptr, funcType);
+        def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
 
-        data.impls.put(*namePtr.base.items, func);
+        data.impls.put(name, func);
 
         if (*data.isExtern) return func;
 
-        def oldret: *ctx.returned;
-        def oldblk: (*ctx.builder).getBlock();
+        def i: new usize = usize(0);
 
-        ctx.returned = Bool(false);
+        while (*i < data.input.len()) {
+            data.ctx.addLocal(*data.input[*i].name, Values.Value.newRtValue(
+                func.getParam(*i),
+                *data.input[*i].value,
+            ));
 
-        def blk: (*ctx.context).appendBasicBlock(func, "entry");
-        (*ctx.builder).setBlock(blk);
+            i = *i + usize(1);
+        }
 
-        def result: &Statements.TopStatement.export(data.body, ctx);
+        def oldret: *data.ctx.returned;
+        def oldblk: (*data.ctx.builder).getBlock();
+
+        data.ctx.returned = Bool(false);
+
+        def blk: (*data.ctx.context).appendBasicBlock(func, "entry");
+        (*data.ctx.builder).setBlock(blk);
+
+        def result: &Statements.TopStatement.export(data.body, data.ctx);
         if (*result.isErr) {
+            (*data.ctx.builder).setBlock(oldblk);
+
             result.errv.print();
             return func;
         }
 
-        if (!*ctx.returned) {
+        if (!*data.ctx.returned) {
             std.Types.printf("warn: implicit return\n");
         }
 
-        (*ctx.builder).setBlock(oldblk);
-        ctx.returned = oldret;
+        (*data.ctx.builder).setBlock(oldblk);
+        data.ctx.returned = oldret;
 
         return func;
     } else {
@@ -71,6 +98,16 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
             return std.Types.ArrayList(LLVM.lType);
         };
         input.init();
+
+        def i: new usize = usize(0);
+
+        while (*i < data.input.len()) {
+            if (*data.input[*i].value.kind != u8(Values.Value.Kind.TypeType)) {
+                input.push(data.input[*i].value.getType(data.ctx));
+            }
+
+            i = *i + usize(1);
+        }
 
         def baseKind: (*ctx.context).voidType();
 
@@ -84,34 +121,80 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
         str = std.Types.String.fromSlice(*data.name);
         str.base.push(u8(0));
 
-        def func: (*ctx.module).addFunction(*str.base.items.ptr, funcType);
+        def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
 
-        data.impls.put(*namePtr.base.items, func);
+        data.impls.put(name, func);
 
         if (*data.isExtern) return func;
 
-        def oldret: *ctx.returned;
-        def oldblk: (*ctx.builder).getBlock();
+        def i: new usize = usize(0);
 
-        ctx.returned = Bool(false);
+        while (*i < data.input.len()) {
+            data.ctx.addLocal(*data.input[*i].name, Values.Value.newRtValue(
+                func.getParam(*i),
+                *data.input[*i].value,
+            ));
 
-        def blk: (*ctx.context).appendBasicBlock(func, "entry");
-        (*ctx.builder).setBlock(blk);
-
-        def result: &Statements.TopStatement.export(data.body, ctx);
-
-        if (!*ctx.returned) {
-            (*ctx.builder).buildVoidRet();
+            i = *i + usize(1);
         }
 
+        def oldret: *data.ctx.returned;
+        def oldblk: (*data.ctx.builder).getBlock();
+
+        data.ctx.returned = Bool(false);
+
+        def blk: (*data.ctx.context).appendBasicBlock(func, "entry");
+        (*data.ctx.builder).setBlock(blk);
+
+        def result: &Statements.TopStatement.export(data.body, data.ctx);
         if (*result.isErr) {
+            (*data.ctx.builder).setBlock(oldblk);
+
             result.errv.print();
             return func;
         }
 
-        (*ctx.builder).setBlock(oldblk);
-        ctx.returned = oldret;
+        if (!*data.ctx.returned) {
+            (*data.ctx.builder).buildVoidRet();
+        }
+
+        (*data.ctx.builder).setBlock(oldblk);
+        data.ctx.returned = oldret;
 
         return func;
     }
+};
+
+def VisitResult: std.Types.Result(Values.Value, Error);
+def visitCall: fn[self: *Values.Value, ctx: *Values.Context, params: *std.Types.ArrayList(Value)] -> VisitResult {
+    def i: new usize = usize(0);
+
+    def data: (*Values.Value.FunctionData)(*self.data);
+    def ctx: &data.ctx.clone();
+
+    def name: new std.Types.String;
+    name = std.Types.String.from("");
+
+    while (*i < params.len()) {
+        name.appendSlice(params[*i].getName());
+
+        ctx.addLocal(*data.input[*i].name, *params[*i]);
+
+        i = *i + usize(1);
+    }
+
+    def kind: data.kinds.get(*name);
+
+    if (kind != (*Values.Value)(null)) {
+        return VisitResult.ok(*kind);
+    }
+
+    def result: &TopStatement.visit(data.body, ctx);
+    if (*result.isErr) {
+        return *result;
+    }
+    
+    def kind: data.kinds.put(*name, *result.okv);
+
+    return *result;
 };

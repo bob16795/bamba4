@@ -15,6 +15,12 @@ def lValue: *class{
         return LLVMTypeOf(self);
     };
 
+    def getParam: fn[self: *Self, id: u32] -> lType {
+        def LLVMGetParam: extern fn[] -> lType;
+
+        return LLVMGetParam(self, id);
+    };
+
     def setInit: fn[self: *Self, value: lValue] -> Void {
         def LLVMSetInitializer: extern fn[] -> Void;
 
@@ -22,7 +28,7 @@ def lValue: *class{
     };
 };
 
-def lType: *class{
+def lType: *class {
     def functionType: fn[self: *Self, input: std.Types.Slice(lType)] -> lType {
         def LLVMFunctionType: extern fn[] -> lType;
         def params: &input;
@@ -139,6 +145,12 @@ def lBuilder: *class {
         LLVMPositionBuilderAtEnd(self, blk);
 
         return;
+    };
+
+    def buildStructGEP: fn[self: *Self, type: lType, ptr: lValue, idx: u32, name: *u8[]] -> lValue {
+        def LLVMBuildStructGEP2: extern fn[] -> lValue;
+
+        return LLVMBuildStructGEP2(self, type, ptr, idx, name);
     };
 
     def buildAlloca: fn[self: *Self, type: lType, name: *u8[]] -> lValue {

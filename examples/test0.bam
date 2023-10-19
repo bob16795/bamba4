@@ -4,46 +4,113 @@ std := import "std";
 entry main := fn -> i32 {
     result: *i32 := new i32 = Foo.value;
 
-    printf("Hello World!");
-    foo();
+    printf("Hello World!\n");
+    printfoo();
 
-    tmp := new Foo;
+    list := new ArrayList(Foo);
+
+    foo := new Foo;
+    foo.a = 0;
+    foo.bar.c = 10;
+
+    list.append(*foo);
+
+    list.print();
 
     //al := ArrayList(Foo);
 
     return *result;
 };
 
-// order dosent matter
-outer_tmp: i32 := 3 + 2;
-
 // a function that returns nothing
-printf := extern fn(string: *u8, params: `...`);
+printf := extern fn(string: *u8);
 malloc := extern fn(size: u32) -> *Void;
 
 // a function that takes in nothing and returns nothing
-foo := fn {
+printfoo := fn {
     // returns are optional on void functions
     printf("test");
 };
 
+// a class
 Foo := class {
     a := prop i32;
-    baz := prop Bar;
+    bar := prop class {
+        c := prop i32;
+    
+        print := fn(self: *Self) {
+            printf("c: %d\n", *self.c);
+        };
+    };
 
+    // a value for main
     value := 3 + 2;
+
+    print := fn(self: *Self) {
+        printf("a: %d\n", *self.a);
+        printf("Bar:\n  ");
+        self.bar.print();
+    };
 };
 
-Bar := class {
-    c := prop i32;
+Slice := fn(T: Type) -> Type {
+    return class {
+        itemSize := @sizeOf(T); 
+        
+        ptr := prop *T;
+        len := prop usize;
+    };
 };
 
-//ArrayList := fn(T: Type) -> Type {
-//    return class {
-//        SliceT := Slice(T);
-//
-//        `drop` := fn(self: *Self) {
-//            return;
-//        };
-//    };
-//};
+ArrayList := fn(T: Type) -> Type {
+    return class {
+        SliceT := Slice(T);
+
+        capacity := prop usize;
+        items := prop SliceT;
+
+        extend := fn(self: *Self) {
+            self.capacity = *self.capacity * 2;
+            if (*self.capacity == 0)
+                self.capacity = 1;
+        };
+
+        append := fn(self: *Self, adds: T) {
+            oldSize := *self.items.len; 
+        };
+
+        print := fn(self: *Self) {
+            printf("[\n");
+
+            if (@hasDef(T, "print")) {
+                i := new usize = 0;
+
+                //while (*i < self.len()) {
+                //    self[*i].print();
+
+                //    i = *i + 1;    
+                //}
+            } else {
+                i := new usize = 0;
+
+                //while (*i < self.len()) {
+                //    printf("%s@0x%x", @name(T), self[*i]);
+
+                //    i = *i + 1;    
+                //}
+            }
+
+            printf("]\n");
+        };
+
+        #new := fn(self: *Self) {
+            self.capacity = 0;
+            //result.items.ptr = null;
+            self.items.len = 0;
+        };
+
+        #drop := fn(self: *Self) {
+            return;
+        };
+    };
+};

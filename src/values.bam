@@ -7,6 +7,11 @@ def Error: import "error.bam".Error;
 def LLVM: import "lib/llvm.bam";
 
 def Value: class {
+    def Builtins: class {
+        def SizeOf: 0;
+        def HasDef: 1;
+    };
+
     def Kind: class {
         def Unvisited: 0;
         def Link: 1;
@@ -20,7 +25,19 @@ def Value: class {
         def RtValue: 8;
         def TypeType: 9;
         
-        def Prop: 10;
+        def BuiltinFunc: 10;
+        
+        def Prop: 11;
+        def Method: 12;
+    };
+
+    def MethodData: class {
+        def parent: prop *Value;
+        def function: prop *Value;
+
+        def `drop`: fn[Self: *Self] -> Void {
+            return;
+        };
     };
 
     def PropData: class {
@@ -37,6 +54,7 @@ def Value: class {
     def UnvisitedData: class {
         def top: prop TopExpression;
         def name: prop std.Types.Slice(u8);
+        def ctx: prop *Context;
 
         def `drop`: fn[Self: *Self] -> Void {
             TopExpression.`drop`(self.top);
@@ -63,16 +81,19 @@ def Value: class {
         def OutputType: std.Types.Option(Value);
         def InputType: std.Types.ArrayList(Param);
 
-        def ImplType: std.Types.HashMap(std.Types.Slice(u8), LLVM.lValue);
+        def ImplType: std.Types.HashMap(std.Types.String, LLVM.lValue);
+        def KindType: std.Types.HashMap(std.Types.String, Value);
        
         def isExtern: prop Bool;
         def output: prop OutputType;
         def input: prop InputType;
         def impls: prop ImplType;
+        def kinds: prop KindType;
         def kind: prop LLVM.lType;
     
         def body: prop TopStatement;
         def name: prop std.Types.Slice(u8);
+        def ctx: prop Context;
 
         def `drop`: fn[Self: *Self] -> Void {
             OutputType.`drop`(self.output);
@@ -127,6 +148,21 @@ def Value: class {
 
         return Self($[u8(Kind.Prop), (*Void)(data)]);
     };
+    
+    def newBuiltin: fn[kind: usize] -> Self {
+        def data: (*usize)(std.Types.malloc(usize.SIZE));
+        data = kind;
+
+        return Self($[u8(Kind.BuiltinFunc), (*Void)(data)]);
+    };
+
+    def newMethod: fn[parent: *Value, function: *Value] -> Self {
+        def data: (*MethodData)(std.Types.malloc(MethodData.SIZE));
+        data.parent = parent;
+        data.function = function;
+
+        return Self($[u8(Kind.Method), (*Void)(data)]);
+    };
 
 
     def newRtValue: fn[value: LLVM.lValue, kind: Value] -> Self {
@@ -156,7 +192,9 @@ def Value: class {
 
     def newFunction: fn[
         output: std.Types.Option(Value),
+        input: std.Types.ArrayList(FunctionData.Param),
         body: TopStatement,
+        ctx: *Context,
         isExtern: Bool
     ] -> Self {
         def data: (*FunctionData)(std.Types.malloc(FunctionData.SIZE));
@@ -164,7 +202,10 @@ def Value: class {
         data.body = body;
         data.name = ClassData.NameT.initFrom("Anon", usize(4));
         data.output = output;
+        data.input = input;
         data.impls = (*data.impls).TYPE.init();
+        data.kinds = (*data.kinds).TYPE.init();
+        data.ctx = ctx.clone();
 
         return Self($[u8(Kind.Function), (*Void)(data)]);
     };
@@ -189,16 +230,39 @@ def Value: class {
         return Self($[u8(Kind.TypeType), (*Void)(null)]);
     };
     
-    def unvisited: fn[top: *TopExpression, name: std.Types.Slice(u8)] -> Self {
+    def unvisited: fn[
+        top: *TopExpression,
+        name: std.Types.Slice(u8),
+        ctx: *Context,
+    ] -> Self {
         def data: (*UnvisitedData)(std.Types.malloc(UnvisitedData.SIZE));
         data.top = *top;
         data.name = name;
+        data.ctx = ctx;
 
         return Self($[u8(Kind.Unvisited), (*Void)(data)]);
     };
     
     def link: fn[data: *Self] -> Self {
         return Self($[u8(Kind.Link), (*Void)(data)]);
+    };
+    
+    def hasDef: fn[self: *Self, ctx: *Values.Context, name: *std.Types.Slice(u8)] -> Bool {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.KClass)) {
+            def data: (*ClassData)(*self.data);
+            def result: data.values.get(*name);
+
+            if (result != (*Self)(null)) {
+                return Bool(true);
+            }
+        }
+
+        return Bool(false);
     };
     
     def getChild: fn[self: *Self, ctx: *Values.Context, name: *std.Types.Slice(u8)] -> *Self {
@@ -216,7 +280,53 @@ def Value: class {
             }
         }
 
-        std.Types.printf("bad parent %d", *self.kind);
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+            def baseKind: &Self.ref(data.kind, ctx);
+
+            def kindChild: Self.getChild(baseKind, ctx, name);
+
+            if (kindChild == (*Self)(null)) {
+                std.Types.printf("bad parent kind %d ", *self.kind);
+                name.print();
+                std.Types.printf("\n");
+
+                return (*Self)(null);
+            }
+        
+            def data: new *Self = kindChild;
+            while (*(*data).kind == u8(Kind.Link))
+                data = *(*data).data;
+            def kindSelf: *data;
+
+            Self.visit(kindSelf, ctx);
+
+            if (*kindSelf.kind == u8(Kind.Prop)) {
+                def data: (*PropData)(*kindSelf.data);
+                def value: (*ctx.builder).buildStructGEP(
+                    baseKind.getType(ctx),
+                    self.getValue(ctx),
+                    *data.id,
+                    "Anon",
+                );
+
+                def result: (*Self)(std.Types.malloc(Self.SIZE));
+                result = newRtValue(value, newPtrType(*data.kind));
+
+                return result;
+            }
+
+            if (*kindSelf.kind == u8(Kind.Function)) {
+                def result: (*Self)(std.Types.malloc(Self.SIZE));
+                result = newMethod(self, kindSelf);
+
+                return result;
+            }
+        
+            std.Types.printf("bad value kind %d ", *kindSelf.kind);
+        }
+
+        std.Types.printf("bad parent %d ", *self.kind);
         name.print();
         std.Types.printf("\n");
 
@@ -305,6 +415,18 @@ def Value: class {
         return (LLVM.lValue)(null);
     };
 
+    def isType: fn[self: *Self] -> Bool {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        return
+            *self.kind == u8(Kind.IntType) |
+            *self.kind == u8(Kind.KClass) |
+            *self.kind == u8(Kind.PtrType);
+    };
+
     def getType: fn[self: *Self, ctx: *Values.Context] -> LLVM.lType {
         def data: new *Self = self;
         while (*(*data).kind == u8(Kind.Link))
@@ -374,6 +496,35 @@ def Value: class {
 
         return (LLVM.lType)(null);
     };
+    
+    def getName: fn[self: *Self] -> std.Types.Slice(u8) {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.Function)) {
+            def data: (*FunctionData)(*self.data);
+
+            return *data.name;
+        } else if (*self.kind == u8(Kind.RtValue)) {
+            def word: comptime {
+                return std.Types.Slice(u8);
+            }($["", usize(0)]);
+
+            return word;
+        } else if (*self.kind == u8(Kind.KClass)) {
+            def data: (*ClassData)(*self.data);
+
+            return *data.name;
+        }
+
+        def word: comptime {
+            return std.Types.Slice(u8);
+        }($["", usize(0)]);
+
+        return word;
+    };
 
     def setName: fn[self: *Self, name: std.Types.Slice(u8)] -> Void {
         def data: new *Self = self;
@@ -419,7 +570,7 @@ def Value: class {
         if (*self.kind == u8(Kind.Unvisited)) {
             def data: (*UnvisitedData)(*self.data);
 
-            def res: &TopExpression.visit(data.top, ctx);
+            def res: &TopExpression.visit(data.top, &(*data.ctx).clone());
             if (*res.isErr) {
                 res.errv.print();
                 exit(u8(1));
@@ -443,7 +594,7 @@ def Value: class {
         if (*self.kind == u8(Kind.Unvisited)) {
             def data: (*UnvisitedData)(*self.data);
 
-            def res: &TopExpression.export(data.top, ctx);
+            def res: &TopExpression.export(data.top, &(*data.ctx).clone());
             if (*res.isErr) {
                 res.errv.print();
                 exit(u8(1));
@@ -477,7 +628,8 @@ def Value: class {
         }
 
         if (*self.kind == u8(Kind.IntType) |
-            *self.kind == u8(Kind.VoidType)) {
+            *self.kind == u8(Kind.VoidType) |
+            *self.kind == u8(Kind.KClass)) {
             return VisitResult.ok(Value.newPtrType(*self));
         }
 
@@ -511,17 +663,19 @@ def Value: class {
         def data: new *Self = self;
         while (*(*data).kind == u8(Kind.Link))
             data = *(*data).data;
-        def self: *data;
+        def self: (*data).export(ctx);
 
         if (*self.kind == u8(Kind.Function)) {
             Values.Value.export(self, ctx);
 
-            def word: comptime {
-                return std.Types.Slice(u8);
-            }($["", usize(0)]);
             def data: (*FunctionData)(*self.data);
-            def func: Functions.getImpl(self, ctx, word);
-            def outkind: data.output.val.getType(ctx);
+
+            if (*data.output.val.kind == u8(Kind.TypeType)) {
+                return Functions.visitCall(self, ctx, params);
+            }
+                
+            def name: new std.Types.String;
+            name = std.Types.String.from("");
 
             def args: new comptime {
                 return std.Types.ArrayList(LLVM.lValue);
@@ -531,14 +685,59 @@ def Value: class {
             def i: new usize = usize(0);
 
             while (*i < params.len()) {
-                def res: params[*i].getValue(ctx);
+                if (params[*i].isType()) {
+                    name.appendSlice(Self.getName(params[*i]));
+                } else {
+                    def res: Self.getValue(params[*i], ctx);
+
+                    args.push(res);
+                }
+
+                i = *i + usize(1);
+            }
+
+            def func: Functions.getImpl(self, ctx, *name);
+            def outkind: Self.getType(data.output.val, ctx);
+
+            def value: (*ctx.builder).buildCall(*data.kind, func, args.items, "Anon");
+
+            return VisitResult.ok(Value.newRtValue(value, outkind));
+        } else if (*self.kind == u8(Kind.BuiltinFunc)) {
+            def data: (*usize)(*self.data);
+
+            if (*data == usize(Builtins.HasDef)) {
+                return VisitResult.err(Error.TodoError("has def"));
+            }
+
+            return VisitResult.err(Error.Unreachable("builtin"));
+        } else if (*self.kind == u8(Kind.Method)) {
+            def methodData: (*MethodData)(*self.data);
+            def data: (*methodData.function).export(ctx);
+            def funcData: (*FunctionData)(*data.data);
+
+            def args: new comptime {
+                return std.Types.ArrayList(LLVM.lValue);
+            };
+            args.init();
+                
+            def name: std.Types.String.from("");
+
+            args.push((*methodData.parent).getValue(ctx));
+
+            def i: new usize = usize(0);
+
+            while (*i < params.len()) {
+                def res: Self.getValue(params[*i], ctx);
 
                 args.push(res);
 
                 i = *i + usize(1);
             }
 
-            def value: (*ctx.builder).buildCall(*data.kind, func, args.items, "Anon");
+            def func: Functions.getImpl(data, ctx, name);
+            def outkind: Self.getType(funcData.output.val, ctx);
+
+            def value: (*ctx.builder).buildCall(*funcData.kind, func, args.items, "Anon");
 
             return VisitResult.ok(Value.newRtValue(value, outkind));
         } else {
@@ -566,9 +765,15 @@ def Context: class {
     def module: prop LLVM.lModule;
     def builder: prop LLVM.lBuilder;
     def returned: prop Bool;
+    def selfValue: prop Value;
 
     def getLocal: fn[self: *Self, name: std.Types.Slice(u8)] -> *Value {
         def namePtr: &name;
+       
+        def word: SliceT($["u8", usize(2)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newIntType(u32(8), Bool(false)));
+        }
        
         def word: SliceT($["i32", usize(3)]);
         if (namePtr == word) {
@@ -584,6 +789,24 @@ def Context: class {
         if (namePtr == word) {
             self.locals.put(word, Value.newTypeType());
         }
+        
+        def word: SliceT($["Self", usize(4)]);
+        if (namePtr == word) {
+            return self.selfValue;
+        }
+        
+        def word: SliceT($["@hasDef", usize(7)]);
+        if (namePtr == word) {
+            def result: (*Value)(std.Types.malloc(Value.SIZE));
+            result = Value.newBuiltin(usize(Value.Builtins.HasDef));
+
+            return result;
+        }
+        
+        def word: SliceT($["usize", usize(5)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newIntType(u32(64), Bool(false)));
+        }
 
         return self.locals.get(name);
     };
@@ -594,6 +817,15 @@ def Context: class {
         result.context = LLVM.contextCreate();
         result.module = (*result.context).createModuleWithName("lol");
         result.builder = (*result.context).createBuilder();
+        result.selfValue = null;
+
+        return *result;
+    };
+
+    def clone: fn[self: *Self] -> Self {
+        def result: new Self;
+        result = *self;
+        result.locals = self.locals.clone();
 
         return *result;
     };

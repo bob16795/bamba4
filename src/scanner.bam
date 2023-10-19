@@ -330,9 +330,9 @@ def Scanner: class {
             kind = u8(Token.Kind.New);
         if (*word.len == usize(3) & std.Types.memcmp(*word.ptr, "for", i32(3)) == i32(0))
             kind = u8(Token.Kind.For);
-        if (*word.len == usize(3) & std.Types.memcmp(*word.ptr, "in", i32(3)) == i32(0))
+        if (*word.len == usize(2) & std.Types.memcmp(*word.ptr, "in", i32(2)) == i32(0))
             kind = u8(Token.Kind.In);
-        if (*word.len == usize(3) & std.Types.memcmp(*word.ptr, "if", i32(3)) == i32(0))
+        if (*word.len == usize(2) & std.Types.memcmp(*word.ptr, "if", i32(2)) == i32(0))
             kind = u8(Token.Kind.If);
         if (*word.len == usize(2) & std.Types.memcmp(*word.ptr, "fn", i32(2)) == i32(0))
             kind = u8(Token.Kind.Fn);
@@ -370,6 +370,9 @@ def Scanner: class {
         } else if (*ch.val == u8('`')) {
             return self.identString();
         } else if (*ch.val == u8('@')) {
+            self.advance();
+            return self.ident();
+        } else if (*ch.val == u8('#')) {
             self.advance();
             return self.ident();
         } else if (*ch.val == u8('&')) {

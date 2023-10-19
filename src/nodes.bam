@@ -125,7 +125,11 @@ def FileNode: class {
 
         while (*i < self.defs.len()) {
             def value: (*Values.Value)(std.Types.malloc(Values.Value.SIZE));
-            value = Values.Value.unvisited(self.defs[*i].value, *self.defs[*i].name);
+            value = Values.Value.unvisited(
+                self.defs[*i].value,
+                *self.defs[*i].name,
+                ctx,
+            );
 
             data.values.put(
                 *self.defs[*i].name,

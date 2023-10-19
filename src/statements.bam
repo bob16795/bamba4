@@ -3,6 +3,7 @@ def Expressions: import "expressions.bam";
 def Position: import "position.bam";
 def Nodes: import "nodes.bam";
 def Values: import "values.bam";
+def Error: import "error.bam".Error;
 
 def printf: extern fn[] -> Void;
 
@@ -14,6 +15,7 @@ def TopStatement: class {
         def Expression: 1;
         def Definition: 2;
         def Return: 3;
+        def If: 4;
     };
 
     def pos: prop Position.FileRange;
@@ -34,6 +36,21 @@ def TopStatement: class {
             return PrsResult.ok(Self($[
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Block),
+                expr,
+            ]));
+        }
+        drop parsed;
+                    
+        scn.setCheckpoint(start);
+        
+        def parsed: &IfStatement.parse(scn);
+        if (!*parsed.isErr) {
+            def expr: (*IfStatement)(std.Types.malloc(IfStatement.SIZE));
+            expr = *parsed.okv;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.If),
                 expr,
             ]));
         }
@@ -108,6 +125,28 @@ def TopStatement: class {
         return PrsResult.err(Error.ParseError("expected statement", *(&scn.next()).val.pos));
     };
 
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        if (*self.kind == u8(Kind.Expression)) {
+            def data: (*TopExpression)(*self.child);
+
+            return TopExpression.visit(data, ctx);
+        } else if (*self.kind == u8(Kind.Return)) {
+            def data: (*TopExpression)(*self.child);
+
+            return TopExpression.visit(data, ctx);
+        //} else if (*self.kind == u8(Kind.Definition)) {
+        //    def data: (*DefinitionNode)(*self.child);
+
+        //    return data.visit(ctx);
+        } else if (*self.kind == u8(Kind.Block)) {
+            def data: (*BlockStatement)(*self.child);
+
+            return data.visit(ctx);
+        }
+
+        return VisitResult.err(Error.Unreachable("statement export"));
+    };
+
     def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Expression)) {
             def data: (*TopExpression)(*self.child);
@@ -140,6 +179,10 @@ def TopStatement: class {
             return *res;
         } else if (*self.kind == u8(Kind.Block)) {
             def data: (*BlockStatement)(*self.child);
+
+            return data.export(ctx);
+        } else if (*self.kind == u8(Kind.If)) {
+            def data: (*IfStatement)(*self.child);
 
             return data.export(ctx);
         }
@@ -199,5 +242,107 @@ def BlockStatement: class {
         }
 
         return VisitResult.ok(null);
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def i: new usize = usize(0);
+
+        def result: new Values.Value;
+
+        while (*i < self.children.len()) {
+            def res: &TopStatement.visit(self.children[*i], ctx);
+            if (*res.isErr) {
+                return VisitResult.err(*res.errv);
+            }
+
+            result = *res.okv;
+
+            i = *i + usize(1);
+        }
+
+        return VisitResult.ok(*result);
+    };
+};
+
+def IfStatement: class {
+    def ElseBodyType: std.Types.Option(TopStatement); 
+
+    def cond: prop TopExpression;
+    def body: prop TopStatement;
+    def elseBody: prop ElseBodyType;
+    
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        if ((&scn.matchNext(u8(Token.Kind.If))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `if`", pos));
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.LeftParen))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `(` after if", pos));
+        }
+
+        def cond: &TopExpression.parse(scn);
+        if (*cond.isErr) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(*cond.errv);
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `)` after if cond", pos));
+        }
+
+        def body: &TopStatement.parse(scn);
+        if (*body.isErr) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(*body.errv);
+        }
+
+        def elseBody: &ElseBodyType.none();
+        
+        if ((&scn.matchNext(u8(Token.Kind.Else))).is_some()) {
+            def tmpBody: &TopStatement.parse(scn);
+            if (*tmpBody.isErr) {
+                def pos: *(&scn.next()).val.pos;
+
+                scn.setCheckpoint(start);
+                return PrsResult.err(*tmpBody.errv);
+            }
+            
+            elseBody = ElseBodyType.some(*tmpBody.okv);
+        }
+
+        return PrsResult.ok(Self($[
+            *cond.okv,
+            *body.okv,
+            *elseBody,
+        ]));
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        return VisitResult.err(Error.TodoError("visit if"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def condv: &TopExpression.export(self.cond, ctx);
+        if (*condv.isErr) {
+            return *condv;
+        }
+
+        return VisitResult.err(Error.TodoError("export if"));
     };
 };

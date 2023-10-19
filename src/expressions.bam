@@ -723,7 +723,7 @@ def FactorExpression: class {
         if (*self.kind == u8(Kind.Mul)) {
             return VisitResult.err(Error.TodoError("visit mul"));
         } else if (*self.kind == u8(Kind.UnaryExpression)) {
-            return self.next.visit(ctx);
+            return UnaryExpression.visit(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("factor visit"));
@@ -812,7 +812,7 @@ def UnaryExpression: class {
 
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Deref)) {
-            def next: &UnaryExpression.export(*self.child.ptr, ctx);
+            def next: &UnaryExpression.visit(*self.child.ptr, ctx);
             if (*next.isErr) {
                 return VisitResult.err(*next.errv);
             }
@@ -993,7 +993,7 @@ def CallExpression: class {
 
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Call)) {
-            return VisitResult.err(Error.TodoError("visit call"));
+            return Self.export(self, ctx);
         } else if (*self.kind == u8(Kind.PrimaryExpression)) {
             return self.next.visit(ctx);
         }
@@ -1035,7 +1035,7 @@ def CallExpression: class {
                 return *base;
             }
 
-            def result: base.okv.getChild(ctx, *self.args);
+            def result: Values.Value.getChild(base.okv, ctx, *self.args);
 
             result.export(ctx);
             
@@ -1319,6 +1319,8 @@ def PrimaryExpression: class {
                             return PrsResult.err(Error.ParseError("Expected expression", pos));
                         }
 
+                        funcData.input.push(FunctionData.Param($[*name.val.value, *expr.okv]));
+
                         if ((&scn.matchNext(u8(Token.Kind.Comma))).is_none()) {
                             def cp: &scn.getCheckpoint();
                             if ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
@@ -1327,11 +1329,6 @@ def PrimaryExpression: class {
 
                             scn.setCheckpoint(cp);
                         }
-
-                        def appends: (*FunctionData.Param)(std.Types.malloc(FunctionData.Param.SIZE));
-                        appends = FunctionData.Param($[*name.val.value, *expr.okv]);
-
-                        funcData.input.push(appends);
                     }
                 }
 
@@ -1382,7 +1379,7 @@ def PrimaryExpression: class {
             return VisitResult.ok(result);
         } else if (*self.kind == u8(Kind.Function)) {
             def data: (*FunctionData)(*self.data);
-            
+           
             def output: new comptime {
                 return std.Types.Option(Values.Value);
             };
@@ -1402,9 +1399,27 @@ def PrimaryExpression: class {
                 }.some(*op.okv);
             }
 
+            def input: &comptime {
+                return std.Types.ArrayList(Values.Value.FunctionData.Param);
+            }($[]);
+            input.init();
+
+            def i: new usize = usize(0);
+            while (*i < data.input.len()) {
+                def op: &TopExpression.visit(data.input[*i].value, ctx);
+                if (*op.isErr) {
+                    return VisitResult.err(*op.errv);
+                }
+
+                input.push(Values.Value.FunctionData.Param($[*data.input[*i].name, *op.okv]));
+                i = *i + usize(1);
+            }
+
             def result: &Values.Value.newFunction(
                 *output,
+                *input,
                 *data.body,
+                ctx,
                 *data.isExtern,
             );
 
@@ -1417,8 +1432,15 @@ def PrimaryExpression: class {
         } else if (*self.kind == u8(Kind.Paren)) {
             return (*TopExpression)(*self.data).visit(ctx);
         } else if (*self.kind == u8(Kind.KClass)) {
+            def new_ctx: (*Values.Context)(std.Types.malloc(Values.Context.SIZE));
+            new_ctx = ctx.clone();
+
+            def ctx: new_ctx;
+            
             def i: new usize = usize(0);
-            def result: &Values.Value.newClass();
+            ctx.selfValue = Values.Value.newClass();
+
+            def result: new_ctx.selfValue;
             def resultData: (*Values.Value.ClassData)(*result.data);
 
             def data: (*ClassData)(*self.data);
@@ -1443,7 +1465,11 @@ def PrimaryExpression: class {
                     
                     prop_id = *prop_id + usize(1);
                 } else {
-                    value = Values.Value.unvisited(data.defns[*i].value, *data.defns[*i].name);
+                    value = Values.Value.unvisited(
+                        data.defns[*i].value,
+                        *data.defns[*i].name,
+                        ctx
+                    );
 
                     if (*data.defns[*i].entry) {
                         toVisit.push(*data.defns[*i].name);
@@ -1520,9 +1546,27 @@ def PrimaryExpression: class {
                 }.some(*op.okv);
             }
 
+            def input: &comptime {
+                return std.Types.ArrayList(Values.Value.FunctionData.Param);
+            }($[]);
+            input.init();
+
+            def i: new usize = usize(0);
+            while (*i < data.input.len()) {
+                def op: &TopExpression.visit(data.input[*i].value, ctx);
+                if (*op.isErr) {
+                    return VisitResult.err(*op.errv);
+                }
+
+                input.push(Values.Value.FunctionData.Param($[*data.input[*i].name, *op.okv]));
+                i = *i + usize(1);
+            }
+
             def result: &Values.Value.newFunction(
                 *output,
+                *input,
                 *data.body,
+                ctx,
                 *data.isExtern,
             );
 
@@ -1548,10 +1592,36 @@ def PrimaryExpression: class {
 
             def alloca: (*ctx.builder).buildAlloca(type, "alloca");
 
-            return VisitResult.ok(Values.Value.newRtValue(
+            def result: Values.Value.newRtValue(
                 alloca,
                 Values.Value.newPtrType(*kind.okv),
-            ));
+            );
+
+            def newName: &comptime {
+                return std.Types.Slice(u8);
+            }($["#new", usize(4)]);
+
+            if (kind.okv.hasDef(ctx, newName)) {
+                (&kind.okv.getName()).print();
+                printf("\n");
+
+                def newFn: kind.okv.getChild(ctx, newName);
+
+                def input: &comptime {
+                    return std.Types.ArrayList(Values.Value);
+                }($[]);
+                input.init();
+                input.append(result);
+
+                def res: &newFn.call(ctx, input);
+                if (*res.isErr) {
+                    return *res;
+                }
+            } else {
+                printf("no #new\n");
+            }
+
+            return VisitResult.ok(result);
         } else if (*self.kind == u8(Kind.Ident)) {
             return self.visit(ctx);
         } else if (*self.kind == u8(Kind.KClass)) {
