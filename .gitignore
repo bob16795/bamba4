@@ -1,5 +1,6 @@
 a.out
 ir
-lol.o
+*.o
 tmp
 neovide*
+bamba4

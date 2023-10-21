@@ -20,7 +20,16 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
 
     def data: (*Value.FunctionData)(*self.data);
 
+    if (data.output.is_some() & *data.output.val.kind == u8(Values.Value.Kind.TypeType)) {
+        std.Types.printf("Error: impl type function ");
+        data.name.print();
+        std.Types.printf("\n");
+        return (LLVM.lValue)(null);
+    }
+
     def impl: data.impls.get(name);
+    data.name.print();
+    std.Types.printf("\n");
 
     if (impl != (*LLVM.lValue)(null)) {
         return *impl;
@@ -49,14 +58,24 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
         data.kind = funcType;
 
         def str: new std.Types.String;
-        str = std.Types.String.fromSlice(*data.name);
+        str = std.Types.String.fromSlice(data.name);
         str.base.push(u8(0));
+
+        if (*data.isExtern) {
+            def func: (*ctx.externs).get(*str.base.items);
+            if (func != (*LLVM.lValue)(null)) {
+                return *func;
+            } else {
+                def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
+                
+                (*ctx.externs).put(*str.base.items, func);
+                return func;
+            }
+        }
 
         def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
 
         data.impls.put(name, func);
-
-        if (*data.isExtern) return func;
 
         def i: new usize = usize(0);
 
@@ -69,10 +88,12 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
             i = *i + usize(1);
         }
 
+        def oldfunc: *data.ctx.func;
         def oldret: *data.ctx.returned;
         def oldblk: (*data.ctx.builder).getBlock();
 
         data.ctx.returned = Bool(false);
+        data.ctx.func = func;
 
         def blk: (*data.ctx.context).appendBasicBlock(func, "entry");
         (*data.ctx.builder).setBlock(blk);
@@ -89,8 +110,11 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
             std.Types.printf("warn: implicit return\n");
         }
 
-        (*data.ctx.builder).setBlock(oldblk);
-        data.ctx.returned = oldret;
+        if (usize(oldblk) != usize(0)) {
+            (*data.ctx.builder).setBlock(oldblk);
+            data.ctx.returned = oldret;
+            data.ctx.func = oldfunc;
+        }
 
         return func;
     } else {
@@ -118,14 +142,24 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
         data.kind = funcType;
         
         def str: new std.Types.String;
-        str = std.Types.String.fromSlice(*data.name);
+        str = std.Types.String.fromSlice(data.name);
         str.base.push(u8(0));
+
+        if (*data.isExtern) {
+            def func: (*ctx.externs).get(*str.base.items);
+            if (func != (*LLVM.lValue)(null)) {
+                return *func;
+            } else {
+                def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
+                
+                (*ctx.externs).put(*str.base.items, func);
+                return func;
+            }
+        }
 
         def func: (*data.ctx.module).addFunction(*str.base.items.ptr, funcType);
 
         data.impls.put(name, func);
-
-        if (*data.isExtern) return func;
 
         def i: new usize = usize(0);
 
@@ -138,10 +172,12 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
             i = *i + usize(1);
         }
 
+        def oldfunc: *data.ctx.func;
         def oldret: *data.ctx.returned;
         def oldblk: (*data.ctx.builder).getBlock();
 
         data.ctx.returned = Bool(false);
+        data.ctx.func = func;
 
         def blk: (*data.ctx.context).appendBasicBlock(func, "entry");
         (*data.ctx.builder).setBlock(blk);
@@ -158,8 +194,11 @@ def getImpl: fn[self: *Value, ctx: *Context, name: std.Types.String] -> LLVM.lVa
             (*data.ctx.builder).buildVoidRet();
         }
 
-        (*data.ctx.builder).setBlock(oldblk);
-        data.ctx.returned = oldret;
+        if (usize(oldblk) != usize(0)) {
+            (*data.ctx.builder).setBlock(oldblk);
+            data.ctx.returned = oldret;
+            data.ctx.func = oldfunc;
+        }
 
         return func;
     }
@@ -170,7 +209,9 @@ def visitCall: fn[self: *Values.Value, ctx: *Values.Context, params: *std.Types.
     def i: new usize = usize(0);
 
     def data: (*Values.Value.FunctionData)(*self.data);
-    def ctx: &data.ctx.clone();
+    def new_ctx: (*Values.Context)(std.Types.malloc(Values.Context.SIZE));
+    new_ctx = data.ctx.clone();
+    def ctx: new_ctx;
 
     def name: new std.Types.String;
     name = std.Types.String.from("");
@@ -194,7 +235,7 @@ def visitCall: fn[self: *Values.Value, ctx: *Values.Context, params: *std.Types.
         return *result;
     }
     
-    def kind: data.kinds.put(*name, *result.okv);
+    data.kinds.put(*name, *result.okv);
 
     return *result;
 };

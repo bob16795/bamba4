@@ -1,0 +1,8 @@
+Slice := fn(T: Type) -> Type {
+    return class {
+        itemSize := @sizeOf(T); 
+        
+        ptr := prop *T[];
+        len := prop usize;
+    };
+};

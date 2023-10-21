@@ -3,13 +3,24 @@ def Scanner: import "scanner.bam".Scanner;
 def Values: import "values.bam";
 def Nodes: import "nodes.bam";
 
+def Cli: import "cli.bam";
+
 def readFile: fn[path: std.Types.String] -> std.Types.String {
     def result: new std.Types.String;
     def file: new std.Fs.File;
-    file = std.Fs.File.open(path);
+    def exit: extern fn[] -> Void;
+
+    def pathPtr: &(&path).clone();
+
+    pathPtr.base.append(u8(0));
+
+    file = std.Fs.File.open(*pathPtr);
 
     if (*file.ptr == (*Void)(null)) {
-        return std.Types.String.from("Nothing");
+        std.Types.printf("The file `");
+        pathPtr.print();
+        std.Types.printf("` dosent exist\n");
+        exit(i32(1));
     }
 
     def result: file.readAll();
@@ -17,14 +28,19 @@ def readFile: fn[path: std.Types.String] -> std.Types.String {
     return result;
 };
 
-force def main: fn[] -> i32 {
-    def path: new std.Types.String;
-    path = std.Types.String.from("examples/test0.bam");
+force def main: fn[argc: i32, argv: *(*u8[])[]] -> i32 {
+    def SliceT: comptime {
+        return std.Types.Slice(*u8[]);
+    };
 
-    def conts: readFile(*path);
+    def ai: &SliceT($[argv, usize(argc)]);
+
+    def args: &Cli.parse(ai);
+
+    def conts: readFile(*args.input);
 
     def scn: new Scanner;
-    scn = Scanner.init(conts, path.clone());
+    scn = Scanner.init(conts, args.input.clone());
 
     def fileRes: new Nodes.FileNode.PrsResult = Nodes.FileNode.parse(scn);
     if (*fileRes.isErr) {
@@ -36,13 +52,20 @@ force def main: fn[] -> i32 {
 
     def ctx: new Values.Context = Values.Context.init();
 
-    def res: &file.visit(ctx);
+    def res: &Nodes.FileNode.export(file, ctx);
     if (*res.isErr) {
         res.errv.print();
 
         return i32(1);
     }
 
+    def LLVMPrintModuleToString: extern fn[] -> *u8[];
+    std.Types.printf("%s\n", LLVMPrintModuleToString(*ctx.module));
+
+    args.output.base.append(u8(0));
+
+    ctx.export(*args.output.base.items.ptr);
+    
     std.Types.printf("done\n");
 
     return i32(0);

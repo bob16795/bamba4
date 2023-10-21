@@ -1,0 +1,6 @@
+def todo: fn {
+    def exit: extern fn(code: *32);
+    printf("Todo, not implemented yet");
+
+    exit(0);
+};

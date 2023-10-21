@@ -16,13 +16,12 @@ def TopStatement: class {
         def Definition: 2;
         def Return: 3;
         def If: 4;
+        def While: 5;
     };
 
     def pos: prop Position.FileRange;
     def kind: prop u8;
     def child: prop *Void;
-
-    def ReturnData: std.Types.Option(Expression.TopExpression);
 
     def PrsResult: std.Types.Result(Self, Error);
     def parse: fn[scn: *Scanner] -> PrsResult {
@@ -51,6 +50,21 @@ def TopStatement: class {
             return PrsResult.ok(Self($[
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.If),
+                expr,
+            ]));
+        }
+        drop parsed;
+                    
+        scn.setCheckpoint(start);
+        
+        def parsed: &WhileStatement.parse(scn);
+        if (!*parsed.isErr) {
+            def expr: (*WhileStatement)(std.Types.malloc(WhileStatement.SIZE));
+            expr = *parsed.okv;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.While),
                 expr,
             ]));
         }
@@ -183,6 +197,10 @@ def TopStatement: class {
             return data.export(ctx);
         } else if (*self.kind == u8(Kind.If)) {
             def data: (*IfStatement)(*self.child);
+
+            return data.export(ctx);
+        } else if (*self.kind == u8(Kind.While)) {
+            def data: (*WhileStatement)(*self.child);
 
             return data.export(ctx);
         }
@@ -343,6 +361,144 @@ def IfStatement: class {
             return *condv;
         }
 
+        if (*condv.okv.kind == u8(Values.Value.Kind.ConstBool)) {
+            def b: (*Bool)(*condv.okv.data);
+            if (*b) {
+                return self.body.export(ctx);
+            } else if (self.elseBody.is_some()) {
+                return self.elseBody.val.export(ctx);
+            }
+
+            return VisitResult.ok(Values.Value.newVoidType());
+        }
+
+        if (*condv.okv.kind == u8(Values.Value.Kind.RtValue)) {
+            def startBlock: (*ctx.builder).getBlock();
+
+            def bodyBlock: (*ctx.context).appendBasicBlock(*ctx.func, "ifBody");
+            (*ctx.builder).setBlock(bodyBlock);
+            def err: &self.body.export(ctx);
+            if (*err.isErr) {
+                return *err;
+            }
+
+            def cond: condv.okv.getValue(ctx);
+
+            if (self.elseBody.is_some()) {
+                def elseBlock: (*ctx.context).appendBasicBlock(*ctx.func, "ifElse");
+                (*ctx.builder).setBlock(elseBlock);
+                def err: &self.elseBody.val.export(ctx);
+                if (*err.isErr) {
+                    return *err;
+                }
+                
+                def mergeBlock: (*ctx.context).appendBasicBlock(*ctx.func, "ifMerge");
+                (*ctx.builder).buildBranch(mergeBlock);
+
+                (*ctx.builder).setBlock(bodyBlock);
+                (*ctx.builder).buildBranch(mergeBlock);
+                
+                (*ctx.builder).setBlock(startBlock);
+                (*ctx.builder).buildCondBranch(cond, bodyBlock, elseBlock);
+
+                (*ctx.builder).setBlock(mergeBlock);
+            } else {
+                def mergeBlock: (*ctx.context).appendBasicBlock(*ctx.func, "ifMerge");
+                (*ctx.builder).buildBranch(mergeBlock);
+                
+                (*ctx.builder).setBlock(startBlock);
+                (*ctx.builder).buildCondBranch(cond, bodyBlock, mergeBlock);
+
+                (*ctx.builder).setBlock(mergeBlock);
+            }
+
+            return VisitResult.ok(Values.Value.newVoidType());
+        }
+
+        printf("%d\n", *condv.okv.kind);
+
         return VisitResult.err(Error.TodoError("export if"));
+    };
+};
+
+def WhileStatement: class {
+    def cond: prop TopExpression;
+    def body: prop TopStatement;
+    
+    def PrsResult: std.Types.Result(Self, Error);
+    def parse: fn[scn: *Scanner] -> PrsResult {
+        def start: &scn.getCheckpoint();
+
+        if ((&scn.matchNext(u8(Token.Kind.While))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `while`", pos));
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.LeftParen))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `(` after while", pos));
+        }
+
+        def cond: &TopExpression.parse(scn);
+        if (*cond.isErr) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(*cond.errv);
+        }
+
+        if ((&scn.matchNext(u8(Token.Kind.RightParen))).is_none()) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(Error.ParseError("expected `)` after while cond", pos));
+        }
+
+        def body: &TopStatement.parse(scn);
+        if (*body.isErr) {
+            def pos: *(&scn.next()).val.pos;
+
+            scn.setCheckpoint(start);
+            return PrsResult.err(*body.errv);
+        }
+
+        return PrsResult.ok(Self($[
+            *cond.okv,
+            *body.okv,
+        ]));
+    };
+
+    def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        return VisitResult.err(Error.TodoError("visit while"));
+    };
+    
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def headBlock: (*ctx.context).appendBasicBlock(*ctx.func, "whileHead");
+        (*ctx.builder).buildBranch(headBlock);
+        (*ctx.builder).setBlock(headBlock);
+
+        def condv: &TopExpression.export(self.cond, ctx);
+        if (*condv.isErr) {
+            return *condv;
+        }
+        def cond: condv.okv.getValue(ctx);
+        
+        def bodyBlock: (*ctx.context).appendBasicBlock(*ctx.func, "whileBody");
+        def endBlock: (*ctx.context).appendBasicBlock(*ctx.func, "whileEnd");
+
+        (*ctx.builder).buildCondBranch(cond, bodyBlock, endBlock);
+        (*ctx.builder).setBlock(bodyBlock);
+        def err: &self.body.export(ctx);
+        if (*err.isErr) {
+            return *err;
+        }
+        (*ctx.builder).buildBranch(headBlock);
+        (*ctx.builder).setBlock(endBlock);
+
+        return VisitResult.ok(Values.Value.newVoidType());
     };
 };

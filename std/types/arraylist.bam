@@ -1,0 +1,75 @@
+std := import "std/std.bam";
+
+realloc := extern fn(old: *Void, new_size: usize) -> *Void;
+malloc := extern fn(size: usize) -> *Void;
+free := extern fn(data: *Void);
+printf := extern fn(string: *u8[]);
+
+ArrayList := fn(T: Type) -> Type {
+    return class {
+        SliceT := std.Types.Slice(T);
+        itemSize := @sizeOf(T);
+
+        capacity := prop usize;
+        items := prop SliceT;
+
+        extend := fn(self: *Self) {
+            self.capacity = *self.capacity * 2;
+            if (*self.capacity == 0)
+                self.capacity = 1;
+
+            self.items.ptr = realloc(*self.items.ptr, *self.capacity * itemSize);
+        };
+
+        append := fn(self: *Self, adds: T) {
+            oldSize := *self.items.len; 
+
+            self.items.len = *self.items.len + 1;
+            if (*self.capacity < *self.items.len) {
+                self.extend();
+            }
+
+            (*self.items.ptr)[oldSize] = adds;
+        };
+
+        remove := fn(self: *Self, idx: usize) {
+            std.Debug.Todo.todo();
+        };
+        
+        len := fn(self: *Self) -> usize {
+            return *self.items.len;
+        };
+
+        #print := fn(self: *Self) {
+            printf("[");
+    
+            i := new usize = 0;
+                    
+            while (*i < self.len()) {
+                if (*i != 0) {
+                    printf(", ");
+                }
+
+                std.Debug.Printer(T).print(*(*self.items.ptr)[*i]);
+                
+                i = *i + 1;
+            }
+
+            printf("]");
+        };
+
+        #idx := fn(self: *Self, idx: usize) -> *T {
+            return self.items[idx];
+        };
+
+        #new := fn(self: *Self) {
+            self.capacity = 0;
+            self.items.ptr = null;
+            self.items.len = 0;
+        };
+
+        #drop := fn(self: *Self) {
+            free(*self.items.ptr);
+        };
+    };
+};

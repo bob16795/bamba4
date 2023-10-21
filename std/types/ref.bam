@@ -1,0 +1,22 @@
+Ref := fn(T: Type) -> Type {
+    return class {
+        RefData := class {
+            uses: i32;
+            ptr: *T;
+        };
+
+        data := prop *RefData;
+
+        #copy := fn(Self: *Self) -> Self {
+            (*this.data).uses = *(*this.data).uses + 1;
+        };
+
+        #drop := fn(Self: *Self) {
+            (*this.data).uses = *(*this.data).uses - 1;
+
+            if (*this.uses == 0) {
+                (*this.data).#drop();
+            }
+        };
+    };
+};

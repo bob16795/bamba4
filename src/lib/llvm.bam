@@ -36,10 +36,22 @@ def lType: *class {
         return LLVMFunctionType(self, *params.ptr, *params.len, Bool(false));
     };
     
+    def arrayType: fn[self: *Self, n: usize] -> lType {
+        def LLVMArrayType: extern fn[] -> lType;
+
+        return LLVMArrayType(self, n);
+    };
+    
     def constInt: fn[self: *Self, n: usize, sign: Bool] -> lValue {
         def LLVMConstInt: extern fn[] -> lValue;
 
         return LLVMConstInt(self, n, Bool(false));
+    };
+    
+    def constZero: fn[self: *Self] -> lValue {
+        def LLVMConstNull: extern fn[] -> lValue;
+
+        return LLVMConstNull(self);
     };
 
     def setBody: fn[self: *Self, types: *std.Types.Slice(lType)] -> Void {
@@ -63,10 +75,7 @@ def lModule: *class{
     };
 
     def `drop`: fn[self: *Self] -> Void {
-        def LLVMPrintModuleToString: extern fn[] -> *u8[];
         def LLVMDisposeModule: extern fn[] -> Void;
-
-        std.Types.printf("%s\n", LLVMPrintModuleToString(self));
 
         LLVMDisposeModule(self);
 
@@ -146,11 +155,47 @@ def lBuilder: *class {
 
         return;
     };
+    
+    def buildICmp: fn[self: *Self, op: i32, lhs: lValue, rhs: lValue, name: *u8[]] -> lValue {
+        def LLVMBuildICmp: extern fn[] -> lValue;
+
+        return LLVMBuildICmp(self, op, lhs, rhs, name);
+    };
+    
+    def buildMul: fn[self: *Self, lhs: lValue, rhs: lValue, name: *u8[]] -> lValue {
+        def LLVMBuildMul: extern fn[] -> lValue;
+
+        return LLVMBuildMul(self, lhs, rhs, name);
+    };
+
+    def buildAdd: fn[self: *Self, lhs: lValue, rhs: lValue, name: *u8[]] -> lValue {
+        def LLVMBuildAdd: extern fn[] -> lValue;
+
+        return LLVMBuildAdd(self, lhs, rhs, name);
+    };
+    
+    def buildInBoundsGEP: fn[self: *Self, type: lType, ptr: lValue, idxs: *std.Types.Slice(lValue), name: *u8[]] -> lValue {
+        def LLVMBuildInBoundsGEP2: extern fn[] -> lValue;
+
+        return LLVMBuildInBoundsGEP2(self, type, ptr, *idxs.ptr, *idxs.len, name);
+    };
 
     def buildStructGEP: fn[self: *Self, type: lType, ptr: lValue, idx: u32, name: *u8[]] -> lValue {
         def LLVMBuildStructGEP2: extern fn[] -> lValue;
 
         return LLVMBuildStructGEP2(self, type, ptr, idx, name);
+    };
+
+    def buildBranch: fn[self: *Self, dest: lBlock] -> Void {
+        def LLVMBuildBr: extern fn[] -> Void;
+
+        return LLVMBuildBr(self, dest);   
+    };
+
+    def buildCondBranch: fn[self: *Self, i: lValue, t: lBlock, e: lBlock] -> Void {
+        def LLVMBuildCondBr: extern fn[] -> Void;
+
+        return LLVMBuildCondBr(self, i, t, e);   
     };
 
     def buildAlloca: fn[self: *Self, type: lType, name: *u8[]] -> lValue {
@@ -200,6 +245,65 @@ def lBuilder: *class {
 };
 
 def lBlock: *class {};
+    
+def createMachine: fn[triple: *u8[]] -> lMachine {
+    def LLVMInitializeX86TargetInfo: extern fn[] -> Void;
+    def LLVMInitializeX86Target: extern fn[] -> Void;
+    def LLVMInitializeX86TargetMC: extern fn[] -> Void;
+    def LLVMInitializeX86AsmParser: extern fn[] -> Void;
+    def LLVMInitializeX86AsmPrinter: extern fn[] -> Void;
+    
+    def LLVMGetTargetFromTriple: extern fn[] -> Bool;
+    def LLVMCreateTargetMachine: extern fn[] -> lMachine;
+    def exit: extern fn[] -> Void;
+
+    LLVMInitializeX86TargetInfo();
+    LLVMInitializeX86Target();
+    LLVMInitializeX86TargetMC();
+    LLVMInitializeX86AsmParser();
+    LLVMInitializeX86AsmPrinter();
+
+    def target: new *Void;
+    def err: new *u8[];
+    if (LLVMGetTargetFromTriple(triple, target, err)) {
+        std.Types.printf("%s", *err);
+        exit(0);
+    }
+
+    return LLVMCreateTargetMachine(*target, triple, "generic", "", (*Void)(null), i32(2));
+};
+
+def lMachine: *class {
+    def getData: fn[self: *Self] -> lTargetData {   
+        def LLVMCreateTargetDataLayout: extern fn[] -> lTargetData;
+        
+        return LLVMCreateTargetDataLayout(self);
+    };
+
+    def emitToFile: fn[self: *Self, module: lModule, path: *u8[], type: u32] -> Void {
+        def LLVMTargetMachineEmitToFile: extern fn[] -> Void;
+
+        LLVMTargetMachineEmitToFile(self, module, path, type);
+
+        return;
+    };
+
+    def `drop`: fn[self: *Self] -> Void {
+        def LLVMDisposeTargetMachine: extern fn[] -> Void;
+
+        LLVMDisposeTargetMachine(self);
+
+        return;
+    };
+};
+
+def lTargetData: *class {
+    def sizeOf: fn[self: *Self, type: *lType] -> u64 {
+        def LLVMABISizeOfType: extern fn[] -> u64;
+
+        return LLVMABISizeOfType(self, type);
+    };
+};
 
 def contextCreate: fn[] -> lContext {
     def LLVMContextCreate: extern fn[] -> lContext;

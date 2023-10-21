@@ -442,6 +442,15 @@ def Scanner: class {
             } else {
                 kind = u8(Token.Kind.Equal);
             }
+        } else if (*ch.val == u8('!')) {
+            def peek: *self.src[*self.slice.end];
+            if (peek == u8('=')) {
+                self.advance();
+                word.len = *word.len + usize(1);
+                kind = u8(Token.Kind.ExclaimEqual);
+            } else {
+                kind = u8(Token.Kind.Exclaim);
+            }
         } else {
             return TokenOpt.none();
         }

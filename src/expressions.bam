@@ -9,6 +9,7 @@ def Functions: import "functions.bam";
 def Nodes: import "nodes.bam";
 def Values: import "values.bam";
 def LLVM: import "lib/llvm.bam";
+def Scanner: import "scanner.bam".Scanner;
 
 def printf: extern fn[] -> Void;
 def free: extern fn[] -> Void;
@@ -330,7 +331,7 @@ def AndExpression: class {
         if (*self.kind == u8(Kind.And)) {
             return VisitResult.err(Error.TodoError("visit assign"));
         } else if (*self.kind == u8(Kind.CompareExpression)) {
-            return self.next.visit(ctx);
+            return CompareExpression.visit(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("visit and"));
@@ -340,7 +341,7 @@ def AndExpression: class {
         if (*self.kind == u8(Kind.And)) {
             return VisitResult.err(Error.TodoError("export assign"));
         } else if (*self.kind == u8(Kind.CompareExpression)) {
-            return self.next.export(ctx);
+            return CompareExpression.export(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("export and"));
@@ -402,7 +403,7 @@ def CompareExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Eql),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
         
@@ -418,7 +419,7 @@ def CompareExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.NotEql),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
         
@@ -434,7 +435,7 @@ def CompareExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Less),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -450,7 +451,7 @@ def CompareExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Greater),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -467,7 +468,29 @@ def CompareExpression: class {
 
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Eql)) {
-            return VisitResult.err(Error.TodoError("visit eql"));
+            def a: &TermExpression.visit(self.next, ctx);
+            def b: &Self.visit(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.Eql);
+        } else if (*self.kind == u8(Kind.NotEql)) {
+            def a: &TermExpression.visit(self.next, ctx);
+            def b: &Self.visit(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.NotEql);
+        } else if (*self.kind == u8(Kind.Less)) {
+            def a: &TermExpression.visit(self.next, ctx);
+            def b: &Self.visit(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.Lt);
         } else if (*self.kind == u8(Kind.TermExpression)) {
             return TermExpression.visit(self.next, ctx);
         }
@@ -477,10 +500,34 @@ def CompareExpression: class {
     
     def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Eql)) {
-            return VisitResult.err(Error.TodoError("export eql"));
+            def a: &TermExpression.export(self.next, ctx);
+            def b: &Self.export(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.Eql);
+        } else if (*self.kind == u8(Kind.NotEql)) {
+            def a: &TermExpression.export(self.next, ctx);
+            def b: &Self.export(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.NotEql);
+        } else if (*self.kind == u8(Kind.Less)) {
+            def a: &TermExpression.export(self.next, ctx);
+            def b: &Self.export(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+            
+            return a.okv.compare(ctx, b.okv, Values.Value.Compare.Lt);
         } else if (*self.kind == u8(Kind.TermExpression)) {
             return TermExpression.export(self.next, ctx);
         }
+
+        printf("%d\n", *self.kind);
 
         return VisitResult.err(Error.Unreachable("export comp"));
     };
@@ -571,15 +618,15 @@ def TermExpression: class {
 
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Add)) {
-            def a: &self.next.visit(ctx);
+            def a: &FactorExpression.visit(self.next, ctx);
             def b: &Self.visit(*self.child.ptr, ctx);
 
             if (*a.isErr) return *a;
             if (*b.isErr) return *b;
 
-            return a.okv.add(ctx, b.okv);
+            return a.okv.oper(ctx, b.okv, Values.Value.Operation.Add);
         } else if (*self.kind == u8(Kind.FactorExpression)) {
-            return self.next.visit(ctx);
+            return FactorExpression.visit(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("visit function"));
@@ -587,15 +634,15 @@ def TermExpression: class {
     
     def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Add)) {
-            def a: &self.next.export(ctx);
+            def a: &FactorExpression.export(self.next, ctx);
             def b: &Self.export(*self.child.ptr, ctx);
 
             if (*a.isErr) return *a;
             if (*b.isErr) return *b;
             
-            return a.okv.add(ctx, b.okv);
+            return a.okv.oper(ctx, b.okv, Values.Value.Operation.Add);
         } else if (*self.kind == u8(Kind.FactorExpression)) {
-            return self.next.export(ctx);
+            return FactorExpression.export(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("export function"));
@@ -657,7 +704,7 @@ def FactorExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Mod),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -673,7 +720,7 @@ def FactorExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Div),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -689,7 +736,7 @@ def FactorExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Mul),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -705,7 +752,7 @@ def FactorExpression: class {
                 start.tok_end.to(scn.tok_end),
                 u8(Kind.Xor),
                 *first.okv,
-                BoxT.init(*next),
+                BoxT.init(*next.okv),
             ])); 
         }
 
@@ -721,7 +768,13 @@ def FactorExpression: class {
 
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Mul)) {
-            return VisitResult.err(Error.TodoError("visit mul"));
+            def a: &UnaryExpression.visit(self.next, ctx);
+            def b: &Self.visit(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+
+            return a.okv.oper(ctx, b.okv, Values.Value.Operation.Mul);
         } else if (*self.kind == u8(Kind.UnaryExpression)) {
             return UnaryExpression.visit(self.next, ctx);
         }
@@ -731,7 +784,13 @@ def FactorExpression: class {
     
     def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.Mul)) {
-            return VisitResult.err(Error.TodoError("export mul"));
+            def a: &UnaryExpression.export(self.next, ctx);
+            def b: &Self.export(*self.child.ptr, ctx);
+
+            if (*a.isErr) return *a;
+            if (*b.isErr) return *b;
+
+            return a.okv.oper(ctx, b.okv, Values.Value.Operation.Mul);
         } else if (*self.kind == u8(Kind.UnaryExpression)) {
             return UnaryExpression.export(self.next, ctx);
         }
@@ -794,6 +853,24 @@ def UnaryExpression: class {
             ])); 
         }
 
+        if ((&scn.matchNext(u8(Token.Kind.Ampersand))).is_some()) {
+            def next: &Self.parse(scn);
+
+            if (*next.isErr) {
+                scn.setCheckpoint(start);
+                return PrsResult.err(*next.errv);
+            }
+
+            def first: new CallExpression = null;
+
+            return PrsResult.ok(Self($[
+                start.tok_end.to(scn.tok_end),
+                u8(Kind.Ref),
+                *first,
+                BoxT.init(*next.okv),
+            ])); 
+        }
+
         def next: &CallExpression.parse(scn);
         if (*next.isErr) {
             scn.setCheckpoint(start);
@@ -818,8 +895,15 @@ def UnaryExpression: class {
             }
 
             return next.okv.deref(ctx);
+        } else if (*self.kind == u8(Kind.Ref)) {
+            def next: &UnaryExpression.visit(*self.child.ptr, ctx);
+            if (*next.isErr) {
+                return VisitResult.err(*next.errv);
+            }
+
+            return VisitResult.ok(next.okv.ref(ctx));
         } else if (*self.kind == u8(Kind.CallExpression)) {
-            return self.next.visit(ctx);
+            return CallExpression.visit(self.next, ctx);
         }
 
         return VisitResult.err(Error.Unreachable("unary visit"));
@@ -833,6 +917,13 @@ def UnaryExpression: class {
             }
 
             return next.okv.deref(ctx);
+        } else if (*self.kind == u8(Kind.Ref)) {
+            def next: &UnaryExpression.export(*self.child.ptr, ctx);
+            if (*next.isErr) {
+                return VisitResult.err(*next.errv);
+            }
+
+            return VisitResult.ok(next.okv.ref(ctx));
         } else if (*self.kind == u8(Kind.CallExpression)) {
             return CallExpression.export(self.next, ctx);
         }
@@ -897,11 +988,51 @@ def CallExpression: class {
 
         def tmp_start: new Scanner.Checkpoint;
 
-        while (!*done) {
+        while (!*done & !scn.isAtEnd()) {
             done = Bool(true);
+
             tmp_start = scn.getCheckpoint();
-            
-            {
+            if (*done) {
+                def ident: &scn.matchNext(u8(Token.Kind.LeftBracket));
+                if (ident.is_some()) {
+                    def top: &TopExpression.parse(scn);
+                    def ident: &scn.matchNext(u8(Token.Kind.RightBracket));
+
+                    if (ident.is_some()) {
+                        done = Bool(false);
+
+                        def tmp: new PrimaryExpression;
+                        tmp = null;
+
+                        if (*top.isErr) {
+                            result = Self($[
+                                start.tok_end.to(scn.tok_end),
+                                u8(Kind.Index),
+                                BoxT.init(*result),
+                                usize(0),
+                                *tmp,
+                            ]);
+                        } else {
+                            def tope: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
+                            tope = *top.okv;
+
+                            result = Self($[
+                                start.tok_end.to(scn.tok_end),
+                                u8(Kind.Index),
+                                BoxT.init(*result),
+                                tope,
+                                *tmp,
+                            ]);
+                        }
+                    } else {
+                        scn.setCheckpoint(tmp_start);
+                    }
+                } else {
+                    scn.setCheckpoint(tmp_start);
+                }
+            }
+
+            if (*done) {
                 def ident: &scn.matchNext(u8(Token.Kind.Dot));
                 if (ident.is_some()) {
                     def ident: &scn.matchNext(u8(Token.Kind.Identifier));
@@ -933,7 +1064,7 @@ def CallExpression: class {
                 }
             }
             
-            {
+            if (*done) {
                 def ident: &scn.matchNext(u8(Token.Kind.LeftParen));
                 if (ident.is_some()) {
                     def bad: new Bool = Bool(false);
@@ -996,7 +1127,36 @@ def CallExpression: class {
             return Self.export(self, ctx);
         } else if (*self.kind == u8(Kind.PrimaryExpression)) {
             return self.next.visit(ctx);
+        } else if (*self.kind == u8(Kind.Access)) {
+            def base: &Self.visit(*self.base.ptr, ctx);
+            if (*base.isErr) {
+                return *base;
+            }
+
+            def result: Values.Value.getChild(base.okv, ctx, *self.args);
+
+            result.export(ctx);
+            
+            return VisitResult.ok(*result);
+        } else if (*self.kind == u8(Kind.Index)) {
+            def base: &Self.visit(*self.base.ptr, ctx);
+            if (*base.isErr) {
+                return *base;
+            }
+
+            if (*self.args == (*Void)(null)) {
+                return base.okv.array(ctx);
+            }
+
+            def idx: &(TopExpression.visit(*self.args, ctx));
+            if (*idx.isErr) {
+                return *idx;
+            }
+
+            return base.okv.index(ctx, idx.okv);
         }
+        
+        printf("%d\n", *self.kind);
 
         return VisitResult.err(Error.Unreachable("call visit"));
     };
@@ -1042,6 +1202,22 @@ def CallExpression: class {
             return VisitResult.ok(*result);
         } else if (*self.kind == u8(Kind.PrimaryExpression)) {
             return self.next.export(ctx);
+        } else if (*self.kind == u8(Kind.Index)) {
+            def base: &Self.export(*self.base.ptr, ctx);
+            if (*base.isErr) {
+                return *base;
+            }
+
+            if (*self.args == (*Void)(null)) {
+                return base.okv.array(ctx);
+            }
+
+            def idx: &TopExpression.export(*self.args, ctx);
+            if (*idx.isErr) {
+                return *idx;
+            }
+
+            return base.okv.index(ctx, idx.okv);
         }
 
         printf("%d\n", *self.kind);
@@ -1200,13 +1376,13 @@ def PrimaryExpression: class {
         {
             def ident: &scn.matchNext(u8(Token.Kind.LeftParen));
             if (ident.is_some()) {
-                def top: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
                 def tmp: &TopExpression.parse(scn);
                 if (*tmp.isErr) {
                     scn.setCheckpoint(start);
                     return PrsResult.err(Error.ParseError("expected expr in paren", ident.val.pos));
                 }
-
+                
+                def top: (*TopExpression)(std.Types.malloc(TopExpression.SIZE));
                 top = *tmp.okv;
 
                 def ident: &scn.matchNext(u8(Token.Kind.RightParen));
@@ -1372,7 +1548,7 @@ def PrimaryExpression: class {
     def visit: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         if (*self.kind == u8(Kind.ConstInt)) {
             def str: new std.Types.String;
-            str = std.Types.String.fromSlice(*self.slice);
+            str = std.Types.String.fromSlice(self.slice);
 
             def result: Values.Value.newConstInt(str.toInt());
 
@@ -1380,9 +1556,9 @@ def PrimaryExpression: class {
         } else if (*self.kind == u8(Kind.Function)) {
             def data: (*FunctionData)(*self.data);
            
-            def output: new comptime {
+            def output: &comptime {
                 return std.Types.Option(Values.Value);
-            };
+            }($[]);
 
             output = comptime {
                 return std.Types.Option(Values.Value);
@@ -1507,6 +1683,35 @@ def PrimaryExpression: class {
             def kind: OrExpression.visit(*self.data, ctx);
 
             return VisitResult.err(Error.TodoError("New visit"));
+        } else if (*self.kind == u8(Kind.Import)) {
+            def file: (*ctx.files).get(*self.slice);
+
+            if (file != (*Values.Value)(null)) {
+                return VisitResult.ok(Values.Value.link(file));
+            } else {
+                def new_ctx: (*Values.Context)(std.Types.malloc(Values.Context.SIZE));
+                new_ctx = ctx.clone_empty();
+
+                def path: &std.Types.String.fromSlice(self.slice);
+                
+                def conts: readFile(*path);
+
+                def scn: &Scanner.init(conts, path.clone());
+                def fileNode: &Nodes.FileNode.parse(scn);
+                if (*fileNode.isErr) {
+                    return VisitResult.err(*fileNode.errv);
+                }
+            
+                def visited: &Nodes.FileNode.visit(fileNode.okv, new_ctx);
+                if (*visited.isErr) {
+                    return *visited;
+                }
+
+                (*ctx.files).put(*self.slice, *visited.okv);
+
+                def file: (*ctx.files).get(*self.slice);
+                return VisitResult.ok(Values.Value.link(file));
+            }
         } else if (*self.kind == u8(Kind.Ident)) {
             def local: ctx.getLocal(*self.slice);
             if (local == (*Values.Value)(null)) {
@@ -1527,9 +1732,9 @@ def PrimaryExpression: class {
         } else if (*self.kind == u8(Kind.Function)) {
             def data: (*FunctionData)(*self.data);
            
-            def output: new comptime {
+            def output: &comptime {
                 return std.Types.Option(Values.Value);
-            };
+            }($[]);
 
             output = comptime {
                 return std.Types.Option(Values.Value);
@@ -1602,10 +1807,7 @@ def PrimaryExpression: class {
             }($["#new", usize(4)]);
 
             if (kind.okv.hasDef(ctx, newName)) {
-                (&kind.okv.getName()).print();
-                printf("\n");
-
-                def newFn: kind.okv.getChild(ctx, newName);
+                def newFn: kind.okv.getChild(ctx, newName).export(ctx);
 
                 def input: &comptime {
                     return std.Types.ArrayList(Values.Value);
@@ -1617,27 +1819,56 @@ def PrimaryExpression: class {
                 if (*res.isErr) {
                     return *res;
                 }
-            } else {
-                printf("no #new\n");
             }
 
             return VisitResult.ok(result);
         } else if (*self.kind == u8(Kind.Ident)) {
             return self.visit(ctx);
+        } else if (*self.kind == u8(Kind.Import)) {
+            def file: (*ctx.files).get(*self.slice);
+
+            if (file != (*Values.Value)(null)) {
+                return VisitResult.ok(Values.Value.link(file));
+            } else {
+                def new_ctx: (*Values.Context)(std.Types.malloc(Values.Context.SIZE));
+                new_ctx = ctx.clone_empty();
+
+                def path: &std.Types.String.fromSlice(self.slice);
+                
+                def conts: readFile(*path);
+
+                def scn: &Scanner.init(conts, path.clone());
+                def fileNode: &Nodes.FileNode.parse(scn);
+                if (*fileNode.isErr) {
+                    return VisitResult.err(*fileNode.errv);
+                }
+            
+                def visited: &Nodes.FileNode.export(fileNode.okv, new_ctx);
+                if (*visited.isErr) {
+                    return *visited;
+                }
+
+                (*ctx.files).put(*self.slice, *visited.okv);
+
+                def file: (*ctx.files).get(*self.slice);
+                return VisitResult.ok(Values.Value.link(file));
+            }
         } else if (*self.kind == u8(Kind.KClass)) {
             return self.visit(ctx);
         } else if (*self.kind == u8(Kind.ConstString)) {
-            def string_val: (*ctx.context).constString(self.slice);
-            def string: (*ctx.module).addGlobal(string_val.getType(), "Anon");
+            return VisitResult.ok(Values.Value.newConstString(*self.slice));
 
-            string.setInit(string_val);
+            //def string_val: (*ctx.context).constString(self.slice);
+            //def string: (*ctx.module).addGlobal(string_val.getType(), "Anon");
 
-            return VisitResult.ok(Values.Value.newRtValue(
-                string,
-                Values.Value.newPtrType(
-                    Values.Value.newIntType(u32(8), Bool(false)),
-                ),
-            ));
+            //string.setInit(string_val);
+
+            //return VisitResult.ok(Values.Value.newRtValue(
+            //    string,
+            //    Values.Value.newPtrType(
+            //        Values.Value.newIntType(u32(8), Bool(false)),
+            //    ),
+            //));
         }
 
         return VisitResult.err(Error.Unreachable("primary export"));

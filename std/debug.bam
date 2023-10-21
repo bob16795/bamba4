@@ -1,0 +1,2 @@
+Printer := import "std/debug/printer.bam".Printer;
+Todo := import "std/debug/todo.bam";

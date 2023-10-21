@@ -1,4 +1,4 @@
-std := import "std";
+std := import "std/std.bam";
 
 // a function that takes in nothing
 entry main := fn -> i32 {
@@ -7,110 +7,61 @@ entry main := fn -> i32 {
     printf("Hello World!\n");
     printfoo();
 
-    list := new ArrayList(Foo);
-
     foo := new Foo;
     foo.a = 0;
     foo.bar.c = 10;
 
+    list := new std.Types.ArrayList(Foo);
+    list.append(*foo);
+    
+    foo.a = 1;
+
+    list_two := new std.Types.ArrayList(Foo);
+    list_two.append(*foo);
+    list_two.append(*foo);
+    list.append(*foo);
+    list.append(*foo);
+    list.append(*foo);
     list.append(*foo);
 
-    list.print();
+    std.Debug.Printer(@typeOf(list)).println(list);
+    std.Debug.Printer(@typeOf(list_two)).println(list_two);
 
-    //al := ArrayList(Foo);
+    result = 0;
+
+    list.#drop();
+    list_two.#drop();
 
     return *result;
 };
 
-// a function that returns nothing
-printf := extern fn(string: *u8);
-malloc := extern fn(size: u32) -> *Void;
+printf := extern fn(s: *u8[]);
 
 // a function that takes in nothing and returns nothing
 printfoo := fn {
     // returns are optional on void functions
-    printf("test");
+    printf("test\n");
 };
 
 // a class
 Foo := class {
     a := prop i32;
-    bar := prop class {
-        c := prop i32;
-    
-        print := fn(self: *Self) {
-            printf("c: %d\n", *self.c);
-        };
-    };
+    bar := prop Bar; 
 
     // a value for main
     value := 3 + 2;
 
-    print := fn(self: *Self) {
-        printf("a: %d\n", *self.a);
-        printf("Bar:\n  ");
-        self.bar.print();
+    #print := fn(self: *Self) {
+        printf("Foo{a: %d, bar: ", *self.a);
+        std.Debug.Printer(Bar).print(*self.bar);
+        printf("}");
     };
 };
 
-Slice := fn(T: Type) -> Type {
-    return class {
-        itemSize := @sizeOf(T); 
-        
-        ptr := prop *T;
-        len := prop usize;
-    };
-};
+Bar := class {
+    c := prop i32;
 
-ArrayList := fn(T: Type) -> Type {
-    return class {
-        SliceT := Slice(T);
-
-        capacity := prop usize;
-        items := prop SliceT;
-
-        extend := fn(self: *Self) {
-            self.capacity = *self.capacity * 2;
-            if (*self.capacity == 0)
-                self.capacity = 1;
-        };
-
-        append := fn(self: *Self, adds: T) {
-            oldSize := *self.items.len; 
-        };
-
-        print := fn(self: *Self) {
-            printf("[\n");
-
-            if (@hasDef(T, "print")) {
-                i := new usize = 0;
-
-                //while (*i < self.len()) {
-                //    self[*i].print();
-
-                //    i = *i + 1;    
-                //}
-            } else {
-                i := new usize = 0;
-
-                //while (*i < self.len()) {
-                //    printf("%s@0x%x", @name(T), self[*i]);
-
-                //    i = *i + 1;    
-                //}
-            }
-
-            printf("]\n");
-        };
-
-        #new := fn(self: *Self) {
-            self.capacity = 0;
-            //result.items.ptr = null;
-            self.items.len = 0;
-        };
-
-        #drop := fn(self: *Self) {
-            return;
-        };
+    #print := fn(self: *Self) {
+        printf("Bar{c: %d}", *self.c);
     };
 };

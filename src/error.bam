@@ -8,6 +8,7 @@ def Error: class {
         def Unreachable: u8(2);
         def NoLocal: u8(3);
         def NoType: u8(4);
+        def CallError: u8(5);
     };
 
     def id: prop u8;
@@ -57,6 +58,16 @@ def Error: class {
 
         return *result;
     };
+    
+    def CallError: fn[expected: usize, got: usize] -> Self {
+        def result: new Self;
+
+        result.id = Id.CallError;
+        result.data[usize(0)] = expected;
+        result.data[usize(1)] = got;
+
+        return *result;
+    };
 
     def Unreachable: fn[name: *u8[]] -> Self {
         def result: new Self;
@@ -84,6 +95,8 @@ def Error: class {
             printf("The Local %.*s is undefined.\n", *self.data[usize(1)], *self.data[usize(0)]);
             self.pos.print();
             printf("\n");
+        } else if (*self.id == Id.CallError) {
+            printf("Attempt to call function with wrong arg count, expected %d, got %d\n", *self.data[usize(0)], *self.data[usize(1)]);
         } else {
             printf("Invalid Error\n");
         }

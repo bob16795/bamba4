@@ -1,0 +1,33 @@
+Meta := import "std/std.bam".Meta;
+
+printf := extern fn(s: *u8[]);
+
+Printer := fn(T: Type) -> Type {
+    return class {
+        kind := @enumRepr(T);
+        
+        print := fn(v: T) {
+            if (kind == Meta.TypeKind.ClassType) {
+                nv := new T = v;
+                if (@hasDef(T, "#print")) {
+                    T.#print(nv);
+                } else {
+                    printf("%s@0x%x", @name(T), nv);
+                }
+            } else if (kind == Meta.TypeKind.PointerType) {
+                if (@hasDef(&T, "#print")) {
+                    (&T).#print(v);
+                } else {
+                    printf("%s@0x%x", @name(&T), v);
+                }
+            } else {
+                printf("Cant print type %d\n", usize(kind));
+            }
+        };
+
+        println := fn(v: T) {
+            print(v);
+            printf("\n");
+        };
+    };
+};

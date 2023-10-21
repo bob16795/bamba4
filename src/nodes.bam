@@ -152,6 +152,53 @@ def FileNode: class {
         while (*j < toVisit.len()) {
             def p: data.values.get(*toVisit[*j]);
 
+            Values.Value.visit(p, ctx);
+
+            p.setName(*toVisit[*j]);
+
+            j = *j + usize(1);
+        }
+
+        return VisitResult.ok(*result);
+    };
+
+    def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def i: new usize = usize(0);
+        def result: &Values.Value.newClass();
+        def data: (*Values.Value.ClassData)(*result.data);
+
+        def toVisit: new ToVisitType;
+        toVisit.init();
+
+        while (*i < self.defs.len()) {
+            def value: (*Values.Value)(std.Types.malloc(Values.Value.SIZE));
+            value = Values.Value.unvisited(
+                self.defs[*i].value,
+                *self.defs[*i].name,
+                ctx,
+            );
+
+            data.values.put(
+                *self.defs[*i].name,
+                Values.Value.link(value),
+            );
+            
+            ctx.addLocal(
+                *self.defs[*i].name,
+                Values.Value.link(value),
+            );
+
+            if (*self.defs[*i].entry) {
+                toVisit.push(*self.defs[*i].name);
+            }
+
+            i = *i + usize(1);
+        }
+        
+        def j: new usize = usize(0);
+        while (*j < toVisit.len()) {
+            def p: data.values.get(*toVisit[*j]);
+
             Values.Value.export(p, ctx);
 
             p.setName(*toVisit[*j]);

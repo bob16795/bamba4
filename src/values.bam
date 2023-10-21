@@ -10,6 +10,9 @@ def Value: class {
     def Builtins: class {
         def SizeOf: 0;
         def HasDef: 1;
+        def TypeOf: 2;
+        def Name: 3;
+        def EnumRepr: 4;
     };
 
     def Kind: class {
@@ -21,19 +24,40 @@ def Value: class {
         def ConstInt: 4;
         def IntType: 5;
         def PtrType: 6;
-        def VoidType: 7;
-        def RtValue: 8;
-        def TypeType: 9;
+        def ArrayType: 7;
+        def VoidType: 8;
+        def RtValue: 9;
+        def TypeType: 10;
+        def ConstBool: 11;
+        def ConstString: 12;
+        def ConstEnum: 13;
+        def EnumType: 14;
+        def NullValue: 15;
         
-        def BuiltinFunc: 10;
+        def BuiltinFunc: 16;
         
-        def Prop: 11;
-        def Method: 12;
+        def Prop: 17;
+        def Method: 18;
+    };
+
+    def Compare: class {
+        def Lt: u8(0);
+        def Eql: u8(1);
+        def NotEql: u8(2);
+        def Gt: u8(3);
+    };
+    
+    def Operation: class {
+        def Add: u8(0);
+        def Sub: u8(1);
+        def Mul: u8(2);
+        def Div: u8(3);
+        def Mod: u8(4);
     };
 
     def MethodData: class {
-        def parent: prop *Value;
-        def function: prop *Value;
+        def parent: prop Value;
+        def function: prop Value;
 
         def `drop`: fn[Self: *Self] -> Void {
             return;
@@ -158,8 +182,8 @@ def Value: class {
 
     def newMethod: fn[parent: *Value, function: *Value] -> Self {
         def data: (*MethodData)(std.Types.malloc(MethodData.SIZE));
-        data.parent = parent;
-        data.function = function;
+        data.parent = *parent;
+        data.function = *function;
 
         return Self($[u8(Kind.Method), (*Void)(data)]);
     };
@@ -178,6 +202,13 @@ def Value: class {
         data = child;
 
         return Self($[u8(Kind.PtrType), (*Void)(data)]);
+    };
+
+    def newArrayType: fn[child: Value] -> Self {
+        def data: (*Value)(std.Types.malloc(Value.SIZE));
+        data = child;
+
+        return Self($[u8(Kind.ArrayType), (*Void)(data)]);
     };
 
     def newClass: fn[] -> Self {
@@ -209,9 +240,27 @@ def Value: class {
 
         return Self($[u8(Kind.Function), (*Void)(data)]);
     };
+    
+    def newConstBool: fn[b: Bool] -> Self {
+        def data: (*Bool)(std.Types.malloc(Bool.SIZE));
+        data = b;
+
+        return Self($[u8(Kind.ConstBool), (*Void)(data)]);
+    };
 
     def newConstInt: fn[data: usize] -> Self {
         return Self($[u8(Kind.ConstInt), (*Void)(data)]);
+    };
+    
+    def newConstString: fn[slice: std.Types.Slice(u8)] -> Self {
+        def SliceT: comptime {
+            return std.Types.Slice(u8);
+        };
+
+        def data: (*SliceT)(std.Types.malloc(SliceT.SIZE));
+        data = slice;
+
+        return Self($[u8(Kind.ConstString), (*Void)(data)]);
     };
 
     def newIntType: fn[size: u32, signed: Bool] -> Self {
@@ -224,6 +273,10 @@ def Value: class {
 
     def newVoidType: fn[] -> Self {
         return Self($[u8(Kind.VoidType), (*Void)(null)]);
+    };
+    
+    def newNullValue: fn[] -> Self {
+        return Self($[u8(Kind.NullValue), (*Void)(null)]);
     };
     
     def newTypeType: fn[] -> Self {
@@ -345,6 +398,21 @@ def Value: class {
             return *data.value;
         }
 
+        if (*self.kind == u8(Kind.ConstString)) {
+            def aadds: new std.Types.String = std.Types.String.fromSlice(*self.data);
+            def badds: new std.Types.String = aadds.replace("\\n", "\n");
+            drop aadds;
+            def aadds: new std.Types.String = badds.replace("\\r", "\r");
+            drop badds;
+
+            def string_val: (*ctx.context).constString(aadds.base.items);
+            def string: (*ctx.module).addGlobal(string_val.getType(), "Anon");
+
+            string.setInit(string_val);
+
+            return string;
+        }
+
         std.Types.printf("bad value %d\n", *self.kind);
 
         return (LLVM.lValue)(null);
@@ -363,11 +431,32 @@ def Value: class {
                 *data.value,
                 *type,
             );
+        } if (*self.kind == u8(Kind.NullValue)) {
+            def data: (usize)(*self.data);
+
+            return newRtValue(
+                type.getType(ctx).constZero(),
+                *type,
+            ); 
         } if (*self.kind == u8(Kind.ConstInt)) {
             def data: (usize)(*self.data);
 
             return newRtValue(
                 type.getType(ctx).constInt(data, Bool(false)),
+                *type,
+            ); 
+        } if (*self.kind == u8(Kind.ConstString)) {
+            def val: self.getValue(ctx);
+
+            return Self.tryCast(&newRtValue(
+                val,
+                newPtrType(newArrayType(newIntType(u32(8), Bool(false)))),
+            ), ctx, type); 
+        } if (*self.kind == u8(Kind.ConstBool)) {
+            def data: (Bool)(*self.data);
+
+            return newRtValue(
+                (*ctx.context).intType(u32(1)).constInt(usize(data), Bool(false)),
                 *type,
             ); 
         }
@@ -393,7 +482,24 @@ def Value: class {
             return *data.kind;
         }
 
-        std.Types.printf("bad value %d\n", *self.kind);
+        std.Types.printf("bad type value %d\n", *self.kind);
+
+        return (LLVM.lValue)(null);
+    };
+    
+    def exportDrop: fn[self: *Self, ctx: *Values.Context] -> Self {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.PtrType)) {
+            def data: (*Self)(*self.data);
+
+            return *data;
+        }
+
+        std.Types.printf("cant drop %d\n", *self.kind);
 
         return (LLVM.lValue)(null);
     };
@@ -439,6 +545,12 @@ def Value: class {
             return (*ctx.context).intType(*data.size);
         }
 
+        if (*self.kind == u8(Kind.ArrayType)) {
+            def data: (*Self)(*self.data);
+
+            return data.getType(ctx).arrayType(u32(0));
+        }
+
         if (*self.kind == u8(Kind.PtrType)) {
             def data: (*IntTypeData)(*self.data);
 
@@ -453,7 +565,7 @@ def Value: class {
             }
 
             def str: new std.Types.String;
-            str = std.Types.String.fromSlice(*data.name);
+            str = std.Types.String.fromSlice(data.name);
             str.base.append(u8(0));
 
             data.kind = (*ctx.context).createNamedStruct(*str.base.items.ptr);
@@ -570,7 +682,10 @@ def Value: class {
         if (*self.kind == u8(Kind.Unvisited)) {
             def data: (*UnvisitedData)(*self.data);
 
-            def res: &TopExpression.visit(data.top, &(*data.ctx).clone());
+            def nctx: (*Context)(std.Types.malloc(Context.SIZE));
+            nctx = (*data.ctx).clone();
+
+            def res: &TopExpression.visit(data.top, nctx);
             if (*res.isErr) {
                 res.errv.print();
                 exit(u8(1));
@@ -594,7 +709,10 @@ def Value: class {
         if (*self.kind == u8(Kind.Unvisited)) {
             def data: (*UnvisitedData)(*self.data);
 
-            def res: &TopExpression.export(data.top, &(*data.ctx).clone());
+            def nctx: (*Context)(std.Types.malloc(Context.SIZE));
+            nctx = (*data.ctx).clone();
+
+            def res: &TopExpression.export(data.top, nctx);
             if (*res.isErr) {
                 res.errv.print();
                 exit(u8(1));
@@ -608,6 +726,25 @@ def Value: class {
     };
 
     def VisitResult: std.Types.Result(Value, Error);
+    
+    def array: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+
+        if (*self.kind == u8(Kind.IntType) |
+            *self.kind == u8(Kind.VoidType) |
+            *self.kind == u8(Kind.ArrayType) |
+            *self.kind == u8(Kind.PtrType) |
+            *self.kind == u8(Kind.KClass)) {
+            return VisitResult.ok(Value.newArrayType(*self));
+        }
+
+        std.Types.printf("array %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("array export"));
+    };
 
     def deref: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         def data: new *Self = self;
@@ -629,6 +766,8 @@ def Value: class {
 
         if (*self.kind == u8(Kind.IntType) |
             *self.kind == u8(Kind.VoidType) |
+            *self.kind == u8(Kind.ArrayType) |
+            *self.kind == u8(Kind.PtrType) |
             *self.kind == u8(Kind.KClass)) {
             return VisitResult.ok(Value.newPtrType(*self));
         }
@@ -638,11 +777,44 @@ def Value: class {
         return VisitResult.err(Error.Unreachable("deref export"));
     };
     
-    def add: fn[self: *Self, ctx: *Values.Context, other: *Self] -> VisitResult {
+    def index: fn[self: *Self, ctx: *Values.Context, other: *Self] -> VisitResult {
         def data: new *Self = self;
         while (*(*data).kind == u8(Kind.Link))
             data = *(*data).data;
         def self: *data;
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def data: (*RtData)(*self.data);
+            if (*data.kind.kind != u8(Kind.PtrType)) {
+                return VisitResult.err(Error.Unreachable("index error"));
+            }
+            def kind: (*Value)(*data.kind.data);
+            def type: Self.getType(kind, ctx);
+            def otherv: &other.getValue(ctx);
+            def slice: &comptime {
+                return std.Types.Slice(LLVM.lValue);
+            }($[otherv, usize(1)]);
+
+            def value: (*ctx.builder).buildInBoundsGEP(type, *data.value, slice, "Anon");
+
+            return VisitResult.ok(Value.newRtValue(value, newPtrType(*(*Self)(*kind.data))));
+        }
+
+        std.Types.printf("index %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("index export"));
+    };
+
+    
+    def oper: fn[self: *Self, ctx: *Values.Context, other: *Self, opKind: u8] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+        def data: new *Self = other;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def other: *data;
 
         if (*self.kind == u8(Kind.ConstInt) &
             *other.kind == u8(Kind.ConstInt)) {
@@ -650,27 +822,93 @@ def Value: class {
             def a: (usize)(*self.data);
             def b: (usize)(*other.data);
 
-            return VisitResult.ok(newConstInt(a + b));
+            if (opKind == Operation.Add)
+                return VisitResult.ok(newConstInt(a + b));
+            if (opKind == Operation.Mul)
+                return VisitResult.ok(newConstInt(a * b));
         }
 
-        std.Types.printf("add %d\n", *self.kind);
+        if (*self.kind == u8(Kind.RtValue)) {
+            def a: (*RtData)(*self.data);
+            def otherv: (&Self.tryCast(other, ctx, a.kind)).getValue(ctx);
+            
+            def value: new LLVM.lValue;
+            if (opKind == Operation.Add)
+                value = (*ctx.builder).buildAdd(*a.value, otherv, "Anon");
+            else if (opKind == Operation.Mul)
+                value = (*ctx.builder).buildMul(*a.value, otherv, "Anon");
+            else 
+                return VisitResult.err(Error.Unreachable("oper export"));
 
-        return VisitResult.err(Error.Unreachable("add export"));
+            return VisitResult.ok(newRtValue(*value, *a.kind));
+        }
+
+        std.Types.printf("oper %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("oper export"));
     };
+    
+    def compare: fn[self: *Self, ctx: *Values.Context, other: *Self, compKind: u8] -> VisitResult {
+        def data: new *Self = self;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def self: *data;
+        def data: new *Self = other;
+        while (*(*data).kind == u8(Kind.Link))
+            data = *(*data).data;
+        def other: *data;
 
+        if (*self.kind == u8(Kind.ConstInt) &
+            *other.kind == u8(Kind.ConstInt)) {
+
+            def a: (usize)(*self.data);
+            def b: (usize)(*other.data);
+
+            if (compKind == Compare.Eql)
+                return VisitResult.ok(newConstBool(a == b));
+            if (compKind == Compare.NotEql)
+                return VisitResult.ok(newConstBool(a != b));
+            if (compKind == Compare.Lt)
+                return VisitResult.ok(newConstBool(a < b));
+        }
+
+        if (*self.kind == u8(Kind.RtValue)) {
+            def a: (*RtData)(*self.data);
+            def otherv: (&Self.tryCast(other, ctx, a.kind)).getValue(ctx);
+
+            def value: new LLVM.lValue;
+            if (compKind == Compare.Eql)    
+                value = (*ctx.builder).buildICmp(u32(32), *a.value, otherv, "Anon");
+            else if (compKind == Compare.NotEql)    
+                value = (*ctx.builder).buildICmp(u32(33), *a.value, otherv, "Anon");
+            else if (compKind == Compare.Lt) 
+                value = (*ctx.builder).buildICmp(u32(36), *a.value, otherv, "Anon");
+            else
+                return VisitResult.err(Error.Unreachable("compare export"));
+
+            return VisitResult.ok(newRtValue(
+                *value,
+                newIntType(u32(1), Bool(false)),
+            ));
+        }
+
+        std.Types.printf("compare %d\n", *self.kind);
+
+        return VisitResult.err(Error.Unreachable("compare export"));
+    };
 
     def call: fn[self: *Self, ctx: *Values.Context, params: *std.Types.ArrayList(Value)] -> VisitResult {
         def data: new *Self = self;
         while (*(*data).kind == u8(Kind.Link))
             data = *(*data).data;
-        def self: (*data).export(ctx);
+        def self: (*data);
 
         if (*self.kind == u8(Kind.Function)) {
             Values.Value.export(self, ctx);
 
             def data: (*FunctionData)(*self.data);
 
-            if (*data.output.val.kind == u8(Kind.TypeType)) {
+            if (data.output.is_some() & *data.output.val.kind == u8(Kind.TypeType)) {
                 return Functions.visitCall(self, ctx, params);
             }
                 
@@ -684,13 +922,25 @@ def Value: class {
 
             def i: new usize = usize(0);
 
+            if (!*data.isExtern & params.len() != data.input.len()) {
+                return VisitResult.err(Error.CallError(data.input.len(), params.len()));
+            }
+
             while (*i < params.len()) {
                 if (params[*i].isType()) {
                     name.appendSlice(Self.getName(params[*i]));
                 } else {
-                    def res: Self.getValue(params[*i], ctx);
-
-                    args.push(res);
+                    if (*i < data.input.len()) {
+                        def res: Self.getValue(&params[*i].tryCast(
+                            ctx, data.input[*i].value
+                        ), ctx);
+    
+                        args.push(res);
+                    } else {
+                        def res: Self.getValue(params[*i], ctx);
+    
+                        args.push(res);
+                    }
                 }
 
                 i = *i + usize(1);
@@ -706,35 +956,76 @@ def Value: class {
             def data: (*usize)(*self.data);
 
             if (*data == usize(Builtins.HasDef)) {
-                return VisitResult.err(Error.TodoError("has def"));
+                return VisitResult.ok(newConstBool(
+                    params[usize(0)].hasDef(
+                        ctx,
+                        *params[usize(1)].data,
+                    ),
+                ));
+            }
+            
+            if (*data == usize(Builtins.EnumRepr)) {
+                def data: new *Self = params[usize(0)];
+                while (*(*data).kind == u8(Kind.Link))
+                    data = *(*data).data;
+                def self: *data;
+
+                return VisitResult.ok(newConstInt(usize(*self.kind)));
+            }
+            
+            if (*data == usize(Builtins.TypeOf)) {
+                def kind: params[usize(0)].getTypeValue(ctx);
+
+                return VisitResult.ok(kind);
+            }
+            
+            if (*data == usize(Builtins.SizeOf)) {
+                def kind: params[usize(0)].getType(ctx);
+
+                return VisitResult.ok(newConstInt(
+                    (*ctx.targetData).sizeOf(kind),
+                ));
             }
 
             return VisitResult.err(Error.Unreachable("builtin"));
         } else if (*self.kind == u8(Kind.Method)) {
             def methodData: (*MethodData)(*self.data);
-            def data: (*methodData.function).export(ctx);
+            def data: (methodData.function).export(ctx);
             def funcData: (*FunctionData)(*data.data);
 
             def args: new comptime {
                 return std.Types.ArrayList(LLVM.lValue);
             };
             args.init();
-                
-            def name: std.Types.String.from("");
 
-            args.push((*methodData.parent).getValue(ctx));
+            if (!*funcData.isExtern & (params.len() + usize(1)) != funcData.input.len()) {
+                return VisitResult.err(Error.CallError(funcData.input.len(), params.len() + usize(1)));
+            }
+                
+            def name: new std.Types.String;
+            name = std.Types.String.from("");
+
+            args.push((methodData.parent).getValue(ctx));
 
             def i: new usize = usize(0);
 
             while (*i < params.len()) {
-                def res: Self.getValue(params[*i], ctx);
-
-                args.push(res);
+                if (*i < funcData.input.len()) {
+                    def res: Self.getValue(&params[*i].tryCast(
+                        ctx, funcData.input[*i + usize(1)].value
+                    ), ctx);
+    
+                    args.push(res);
+                } else {
+                    def res: Self.getValue(params[*i], ctx);
+    
+                    args.push(res);
+                }
 
                 i = *i + usize(1);
             }
 
-            def func: Functions.getImpl(data, ctx, name);
+            def func: Functions.getImpl(data, ctx, *name);
             def outkind: Self.getType(funcData.output.val, ctx);
 
             def value: (*ctx.builder).buildCall(*funcData.kind, func, args.items, "Anon");
@@ -759,13 +1050,20 @@ def Value: class {
 def Context: class {
     def LocalsT: std.Types.HashMap(std.Types.Slice(u8), Value);
     def SliceT: std.Types.Slice(u8);
+    def FilesT: std.Types.HashMap(std.Types.Slice(u8), Value);
+    def ExternsT: std.Types.HashMap(std.Types.Slice(u8), LLVM.lValue);
     
     def locals: prop LocalsT;
     def context: prop LLVM.lContext;
     def module: prop LLVM.lModule;
     def builder: prop LLVM.lBuilder;
+    def target: prop LLVM.lMachine;
+    def targetData: prop LLVM.lTargetData;
     def returned: prop Bool;
     def selfValue: prop Value;
+    def func: prop LLVM.lValue;
+    def files: prop *FilesT;
+    def externs: prop *ExternsT;
 
     def getLocal: fn[self: *Self, name: std.Types.Slice(u8)] -> *Value {
         def namePtr: &name;
@@ -795,10 +1093,39 @@ def Context: class {
             return self.selfValue;
         }
         
+        def word: SliceT($["null", usize(4)]);
+        if (namePtr == word) {
+            self.locals.put(word, Value.newNullValue());
+        }
+        
         def word: SliceT($["@hasDef", usize(7)]);
         if (namePtr == word) {
             def result: (*Value)(std.Types.malloc(Value.SIZE));
             result = Value.newBuiltin(usize(Value.Builtins.HasDef));
+
+            return result;
+        }
+        
+        def word: SliceT($["@enumRepr", usize(9)]);
+        if (namePtr == word) {
+            def result: (*Value)(std.Types.malloc(Value.SIZE));
+            result = Value.newBuiltin(usize(Value.Builtins.EnumRepr));
+
+            return result;
+        }
+        
+        def word: SliceT($["@typeOf", usize(7)]);
+        if (namePtr == word) {
+            def result: (*Value)(std.Types.malloc(Value.SIZE));
+            result = Value.newBuiltin(usize(Value.Builtins.TypeOf));
+
+            return result;
+        }
+        
+        def word: SliceT($["@sizeOf", usize(7)]);
+        if (namePtr == word) {
+            def result: (*Value)(std.Types.malloc(Value.SIZE));
+            result = Value.newBuiltin(usize(Value.Builtins.SizeOf));
 
             return result;
         }
@@ -817,7 +1144,15 @@ def Context: class {
         result.context = LLVM.contextCreate();
         result.module = (*result.context).createModuleWithName("lol");
         result.builder = (*result.context).createBuilder();
+        result.target = LLVM.createMachine("x86_64-pc-linux-gnu");
+        result.targetData = (*result.target).getData();
         result.selfValue = null;
+
+        result.files = std.Types.malloc(FilesT.SIZE);
+        *result.files = FilesT.init();
+
+        result.externs = std.Types.malloc(ExternsT.SIZE);
+        *result.externs = ExternsT.init();
 
         return *result;
     };
@@ -826,6 +1161,14 @@ def Context: class {
         def result: new Self;
         result = *self;
         result.locals = self.locals.clone();
+
+        return *result;
+    };
+
+    def clone_empty: fn[self: *Self] -> Self {
+        def result: new Self;
+        result = *self;
+        result.locals = LocalsT.init();
 
         return *result;
     };
@@ -847,7 +1190,17 @@ def Context: class {
         }
     };
 
+    def export: fn[self: *Self, path: *u8[]] -> Void {
+        std.Types.printf("%x\n", *self.module);
+        (*self.target).emitToFile(*self.module, path, u32(1));    
+    
+        return;
+    };
+
     def `drop`: fn[self: *Self] -> Void {
+        std.Types.printf("drop Context\n");
+
+        (*self.target).`drop`();
         (*self.builder).`drop`();
         (*self.module).`drop`();
         (*self.context).`drop`();

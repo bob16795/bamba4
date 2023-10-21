@@ -1,0 +1,31 @@
+TypeKind := class {
+    Unvisited := 0;
+    Link := 1;
+    
+    ClassType := 2;
+    Function := 3;
+    ConstInt := 4;
+    IntType := 5;
+    PointerType := 6;
+};
+//def TypeKind: enum {
+//    Unvisited,
+//    Link,
+
+//    KClass,
+//    Function,
+//    ConstInt,
+//    IntType,
+//    PtrType,
+//    ArrayType,
+//    VoidType,
+//    RtValue,
+//    TypeType,
+//    ConstBool,
+//    ConstString,
+//    
+//    BuiltinFunc,
+//    
+//    Prop,
+//    Method,
+//};
