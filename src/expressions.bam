@@ -1802,6 +1802,8 @@ def PrimaryExpression: class {
                 Values.Value.newPtrType(*kind.okv),
             );
 
+            ctx.drops.append(result);
+
             def newName: &comptime {
                 return std.Types.Slice(u8);
             }($["#new", usize(4)]);

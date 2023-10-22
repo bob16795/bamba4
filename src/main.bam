@@ -23,9 +23,10 @@ def readFile: fn[path: std.Types.String] -> std.Types.String {
         exit(i32(1));
     }
 
-    def result: file.readAll();
+    def result: &file.readAll();
+    result.base.append(u8('\n'));
 
-    return result;
+    return *result;
 };
 
 force def main: fn[argc: i32, argv: *(*u8[])[]] -> i32 {

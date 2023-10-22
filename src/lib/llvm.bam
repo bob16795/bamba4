@@ -234,6 +234,12 @@ def lBuilder: *class {
         return LLVMBuildRetVoid(self);
     };   
     
+    def buildIntToPtr: fn[self: *Self, value: lValue, dest: lType, name: *u8[]] -> lValue {
+        def LLVMBuildIntToPtr: extern fn[] -> lValue;
+
+        return LLVMBuildIntToPtr(self, value, dest, name);
+    };
+
     
     def `drop`: fn[self: *Self] -> Void {
         def LLVMDisposeBuilder: extern fn[] -> Void;

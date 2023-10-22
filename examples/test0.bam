@@ -13,7 +13,7 @@ entry main := fn -> i32 {
 
     list := new std.Types.ArrayList(Foo);
     list.append(*foo);
-    
+
     foo.a = 1;
 
     list_two := new std.Types.ArrayList(Foo);
@@ -29,8 +29,9 @@ entry main := fn -> i32 {
 
     result = 0;
 
-    list.#drop();
-    list_two.#drop();
+    str := new std.Types.String = std.Types.String.fromStr("lol");
+
+    std.Debug.Printer(@typeOf(str)).println(str);
 
     return *result;
 };
@@ -45,12 +46,14 @@ printfoo := fn {
 
 // a class
 Foo := class {
+    // some values the class stores
     a := prop i32;
-    bar := prop Bar; 
+    bar := prop Bar;
 
     // a value for main
     value := 3 + 2;
-
+    
+    // a printer
     #print := fn(self: *Self) {
         printf("Foo{a: %d, bar: ", *self.a);
         std.Debug.Printer(Bar).print(*self.bar);

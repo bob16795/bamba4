@@ -20,6 +20,8 @@ Printer := fn(T: Type) -> Type {
                 } else {
                     printf("%s@0x%x", @name(&T), v);
                 }
+            } else if (kind == Meta.TypeKind.IntType) {
+                printf("%d", v);
             } else {
                 printf("Cant print type %d\n", usize(kind));
             }

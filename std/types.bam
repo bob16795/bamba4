@@ -1,2 +1,3 @@
 ArrayList := import "std/types/arraylist.bam".ArrayList;
 Slice := import "std/types/slice.bam".Slice;
+String := import "std/types/string.bam".String;

@@ -4,6 +4,7 @@ realloc := extern fn(old: *Void, new_size: usize) -> *Void;
 malloc := extern fn(size: usize) -> *Void;
 free := extern fn(data: *Void);
 printf := extern fn(string: *u8[]);
+memcpy := extern fn(a: *Void, b: *Void, count: usize);
 
 ArrayList := fn(T: Type) -> Type {
     return class {
@@ -38,6 +39,15 @@ ArrayList := fn(T: Type) -> Type {
         
         len := fn(self: *Self) -> usize {
             return *self.items.len;
+        };
+
+        #clone := fn(self: Self) -> Self {
+            tmp := &self;
+            result := &self;
+            result.items.ptr = malloc(*tmp.items.len * itemSize); 
+            memcpy(*result.items.ptr, *tmp.items.ptr, *tmp.items.len * itemSize);
+
+            return *result;
         };
 
         #print := fn(self: *Self) {

@@ -7,25 +7,19 @@ TypeKind := class {
     ConstInt := 4;
     IntType := 5;
     PointerType := 6;
-};
-//def TypeKind: enum {
-//    Unvisited,
-//    Link,
+    ArrayType := 7;
+    VoidType := 8;
+    Value := 9;
+    TypeType := 10;
+    ConstBool := 11;
+    ConstString := 12;
 
-//    KClass,
-//    Function,
-//    ConstInt,
-//    IntType,
-//    PtrType,
-//    ArrayType,
-//    VoidType,
-//    RtValue,
-//    TypeType,
-//    ConstBool,
-//    ConstString,
-//    
-//    BuiltinFunc,
-//    
-//    Prop,
-//    Method,
-//};
+    Builtin := 13;
+    Prop := 14;
+    Method := 15;
+
+    #print := fn(self: *Self) {
+        if ((*self.val) == Unvisited) printf("Unvisited");
+        if ((*self.val) == Link) printf("Link");
+    };
+};

@@ -217,7 +217,7 @@ def visitCall: fn[self: *Values.Value, ctx: *Values.Context, params: *std.Types.
     name = std.Types.String.from("");
 
     while (*i < params.len()) {
-        name.appendSlice(params[*i].getName());
+        name.appendSlice(Values.Value.getName(params[*i]));
 
         ctx.addLocal(*data.input[*i].name, *params[*i]);
 

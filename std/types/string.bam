@@ -1,0 +1,97 @@
+std := import "std/std.bam";
+
+printf := extern fn(str: *u8[]);
+
+String := class {
+    Base := std.Types.ArrayList(u8);
+
+    base := prop Base;
+
+    fromStr := fn(str: *u8[]) -> Self {
+        result := new Self;
+        i := new usize = 0;
+
+        while (*str[*i] != 0) {
+            result.base.append(*str[*i]);
+
+            i = *i + 1;
+        }
+
+        return @clone(*result);
+    };
+
+    fromSlice := fn(slice: std.Types.Slice(u8)) -> Self {
+        slicePtr := &slice;
+
+        result := new Self;
+        i := new usize = 0;
+
+        while (*i < *slice.len) {
+            result.base.append(*slice[*i]);
+
+            i = *i + 1;
+        }
+
+        return @clone(*result);
+    };
+
+    appendStr := fn(self: *Self, s: *u8[]) {
+        st := new *u8[] = s;
+
+        while (*(*st)[0] != 0) {
+            self.base.append(*(*st)[0]);
+
+            st = *st + 1;
+        }
+    };
+
+    appendSlice := fn(self: *Self, s: std.Types.Slice(u8)) {
+        st := &s;
+        i := new usize = 0;
+
+        while (*i < *st.len) {
+            self.base.append(*st[*i]);
+
+            i = *i + 1;
+        }
+    };
+
+    toInt := fn(self: *Self) -> usize {
+        result := new usize = 0;
+        i := new usize = 0;
+
+        while (*i < self.len()) {
+            result = *result * 10;
+            result = *result + usize(*self[*i]) - 48;
+            
+            i = *i + 1;
+        }
+
+        return *result;
+    }; 
+
+    len := fn(self: *Self) -> usize {
+        return *self.base.items.len;  
+    };
+    
+    #clone := fn(self: Self) -> Self {
+        tmp := &self;
+        tmp.base = @clone(*tmp.base);
+
+        return *tmp;
+    };
+
+    #new := fn(self: *Self) {
+        self.base.#new();
+    };
+
+    #print := fn(self: *Self) {
+        printf("%.*s", *self.base.items.len, *self.base.items.ptr);
+    };
+
+    #drop := fn(self: *Self) {
+        if (self.len() == usize(0)) return;
+
+        self.base.#drop();
+    };
+};

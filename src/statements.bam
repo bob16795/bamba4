@@ -172,6 +172,8 @@ def TopStatement: class {
             return data.export(ctx);
         } else if (*self.kind == u8(Kind.Return)) {
             if (*self.child == (*Void)(null)) {
+                ctx.dropLocals();
+
                 (*ctx.builder).buildVoidRet();
 
                 def tmp: new Values.Value = null;
@@ -187,6 +189,8 @@ def TopStatement: class {
             }
 
             ctx.returned = Bool(true);
+
+            ctx.dropLocals();
 
             (*ctx.builder).buildRet(res.okv.getValue(ctx));
 
@@ -249,6 +253,10 @@ def BlockStatement: class {
 
     def export: fn[self: *Self, ctx: *Values.Context] -> VisitResult {
         def i: new usize = usize(0);
+        
+        def new_ctx: (*Values.Context)(std.Types.malloc(Values.Context.SIZE));
+        new_ctx = ctx.clone();
+        def ctx: new_ctx;
 
         while (*i < self.children.len()) {
             def result: &TopStatement.export(self.children[*i], ctx);
@@ -258,6 +266,8 @@ def BlockStatement: class {
 
             i = *i + usize(1);
         }
+
+        new_ctx.dropLocals();
 
         return VisitResult.ok(null);
     };
